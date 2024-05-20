@@ -1,3 +1,3 @@
 #!/bin/bash
-# creando un despliegue
+# obtener los pods del NS
 kubectl get pods

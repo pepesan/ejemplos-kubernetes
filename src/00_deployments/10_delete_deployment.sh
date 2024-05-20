@@ -1,3 +1,3 @@
 #!/bin/bash
-# creando un despliegue
+# borrar un despliegue
 kubectl delete deployment mi-nginx

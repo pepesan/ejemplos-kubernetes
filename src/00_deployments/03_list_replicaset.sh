@@ -1,3 +1,3 @@
 #!/bin/bash
-# creando un despliegue
+# obtener los replicaset del NS
 kubectl get replicaset
