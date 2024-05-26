@@ -16,4 +16,3 @@ echo "<h2>Hola Mundo</h2>" | sudo tee ${PV_PATH:?}/index.html
 exit
 # creando el PV
 kubectl apply -f ./yaml/02_persistent_volume.yaml
-
