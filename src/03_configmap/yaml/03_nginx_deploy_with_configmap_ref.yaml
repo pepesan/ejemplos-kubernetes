@@ -1,0 +1,28 @@
+#YAML to Delploy NGINX with 2 Replicas
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.23.3 #latest version on DockerHub
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx #nginx specific
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config

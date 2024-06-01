@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mi-configmap
+data:
+  clave: "valor2"
+  variable: "22"
