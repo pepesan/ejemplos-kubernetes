@@ -1,0 +1,4 @@
+# Ejemplo de values.yaml
+replicaCount: 1
+image: nginx:latest
+

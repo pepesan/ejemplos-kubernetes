@@ -1,4 +1,4 @@
-#YAML to Delploy NGINX with 2 Replicas
+#YAML to Deploy NGINX with 1 Replicas
 
 apiVersion: apps/v1
 kind: Deployment
