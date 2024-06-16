@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.name }}-deployment
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.name }}
+        env: {{ .Values.variable | default "valor" }}
+        var1: {{ .Values.name | upper }}
+        var2: {{ .Values.name | lower }}
+        var3: {{ .Values.name | quote }}
+        var4: {{ .Values.name | upper | quote }}
+        var5: {{ .Values.character | repeat 5 }}
+        var6: {{ now | htmlDate | quote}}
+        var7: {{ uuidv4 }}
+    spec:
+      containers:
+        - name: {{ .Values.name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            {{- range .Values.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .containerPort }}
+            {{- end }}
+          env:
+            {{- if .Values.enableFeatureX }}
+            - name: FEATURE_X_ENABLED
+              value: "true"
+            {{- end }}
+            - name: ENVIRONMENT
+              value: "{{ include "mychart.toUpper" "production" }}"
+            - name: DEFINED_URL
+              value: {{ urlJoin (dict "fragment" .Values.fragment "host" .Values.host "path" .Values.path "query" .Values.query "scheme" .Values.scheme "userinfo" .Values.userinfo) | quote }}
+            - name: BASE64ENC
+              value: {{ .Values.path | b64enc }}

@@ -1,0 +1,8 @@
+
+replicaCount: 1
+name: "lookup"
+image:
+  repository: nginx
+  tag: latest
+enableFeatureX: true
+character: a

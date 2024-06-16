@@ -1,0 +1,22 @@
+
+replicaCount: 1
+name: "nombre"
+image:
+  repository: nginx
+  tag: latest
+enableFeatureX: true
+character: a
+ports:
+  - name: http
+    containerPort: 80
+  - name: https
+    containerPort: 443
+  - name: admin
+    containerPort: 8080
+scheme:   'http'
+host:     'server.com:8080'
+path:     '/api'
+query:    'list=false'
+opaque:   nil
+fragment: 'anchor'
+userinfo: 'admin:secret'
