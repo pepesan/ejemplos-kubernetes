@@ -1,6 +1,6 @@
 #!/bin/bash
-SERVER_IP=192.168.59.101
-SERVER_NAME=hello-world.example
+SERVER_IP=192.168.49.2
+SERVER_NAME=echo.prod.mydomain.com
 # crea entrada en /etc/hosts
 echo "$SERVER_IP $SERVER_NAME" | sudo tee -a /etc/hosts
 # lo mostramos
