@@ -1,4 +1,4 @@
 #!/bin/bash
-# creando un despliegue
+# obtiene servicios
 kubectl get services
 # kubectl get svc
