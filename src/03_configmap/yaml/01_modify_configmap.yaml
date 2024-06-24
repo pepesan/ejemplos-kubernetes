@@ -5,3 +5,4 @@ metadata:
 data:
   clave: "valor2"
   variable: "22"
+  miclave: "mivalor"
