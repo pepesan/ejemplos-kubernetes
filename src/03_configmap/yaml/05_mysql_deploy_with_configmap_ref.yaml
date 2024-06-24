@@ -1,0 +1,31 @@
+#YAML to Deploy MYSQL with a ConfigMap Env
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8 #latest version on DockerHub
+          ports:
+            - containerPort: 3306
+          env:
+            # Define the environment variable
+            - name: MYSQL_ROOT_PASSWORD
+              value: "root"
+            # Define the environment variable
+            - name: MYSQL_DATABASE # Notice that the case is different here
+              valueFrom:
+                configMapKeyRef:
+                  name: mysql-configmap # The ConfigMap this value comes from.
+                  key: MYSQL_DATABASE # The key to fetch.
