@@ -10,10 +10,12 @@ spec:
   selector:
     matchLabels:
       app: nginx
+      environment: dev
   template:
     metadata:
       labels:
         app: nginx
+        environment: dev
     spec:
       containers:
         - name: nginx

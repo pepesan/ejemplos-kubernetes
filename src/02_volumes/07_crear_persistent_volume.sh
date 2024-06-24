@@ -5,14 +5,17 @@
 minikube ssh
 
 ## tendrás que ejecutar esto a mano
+sudo su
 export PV_PATH=/mnt/data
 # creamos la carpeta
-mkdir -p $PV_PATH
+sudo mkdir -p $PV_PATH
 # limpiando datos
 rm -rf ${PV_PATH:?}/*
 # meter contenido
 echo "<h2>Hola Mundo</h2>" | sudo tee ${PV_PATH:?}/index.html
-# salimos de la maquina ssh
+# salimos de sudo
+exit
+# salimos de la máquina ssh
 exit
 # creando el PV
 kubectl apply -f ./yaml/02_persistent_volume.yaml
