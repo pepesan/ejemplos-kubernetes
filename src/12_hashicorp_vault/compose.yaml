@@ -1,0 +1,37 @@
+services:
+  vault-server:
+    image: vault:1.13.3
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_ADDR: "http://0.0.0.0:8200"
+      VAULT_DEV_ROOT_TOKEN_ID: "vault-plaintext-root-token"
+    cap_add:
+      - IPC_LOCK
+    networks:
+      vault-network:
+        ipv4_address: 172.41.0.10
+        aliases:
+          - vault-server
+  vault-client:
+    build: .
+    environment:
+      VAULT_ADDR: "http://vault-server:8200"
+      VAULT_TOKEN: "vault-plaintext-root-token"
+    stdin_open: true
+    tty: true
+    networks:
+      vault-network:
+        ipv4_address: 172.41.0.20
+        aliases:
+          - vault-client
+  vault-client-app:
+    image: burtlo/devwebapp-ruby:k8s
+    environment:
+      VAULT_ADDR: "http://192.168.31.50:8200"
+      VAULT_TOKEN: "vault-plaintext-root-token"
+networks:
+  vault-network:
+    ipam:
+      config:
+        - subnet: 172.41.0.0/24
