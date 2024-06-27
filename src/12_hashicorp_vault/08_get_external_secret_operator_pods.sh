@@ -1,3 +1,3 @@
 #!/bin/bash
 
-kubectl get pods -n external-secrets
+watch kubectl get pods -n external-secrets

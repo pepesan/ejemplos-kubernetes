@@ -30,6 +30,11 @@ services:
     environment:
       VAULT_ADDR: "http://192.168.31.50:8200"
       VAULT_TOKEN: "vault-plaintext-root-token"
+    networks:
+      vault-network:
+        ipv4_address: 172.41.0.30
+        aliases:
+          - vault-client-app
 networks:
   vault-network:
     ipam:
