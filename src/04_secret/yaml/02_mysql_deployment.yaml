@@ -56,4 +56,5 @@ spec:
     - protocol: TCP
       port: 3306  # Port inside the pod
       targetPort: 3306  # Port the service exposes
+      nodePort: 32060
   type: NodePort

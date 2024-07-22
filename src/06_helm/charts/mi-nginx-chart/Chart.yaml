@@ -4,7 +4,7 @@ name: mi-nginx-chart
 # v2 es para Helm 3 o superior
 apiVersion: v2
 # versión del chart
-version: 0.2.0
+version: 0.1.0
 # descripción del chart
 description: Un chart de ejemplo para Helm
 # versión del software a desplegar
@@ -14,3 +14,4 @@ keywords:
   - ejemplo
   - helm
   - tutorial
+  - nginx

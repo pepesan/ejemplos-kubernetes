@@ -1,5 +1,5 @@
 #!/bin/bash
-POD_NAME=mysql-847f744cb9-jgvvt
+POD_NAME=mysql-847f744cb9-dj7qn
 # acceso vía exec command de bash
 kubectl exec -it $POD_NAME -- /bin/bash
 

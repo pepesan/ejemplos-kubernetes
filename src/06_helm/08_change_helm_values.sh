@@ -4,7 +4,7 @@ CHART_NAME=mi-nginx-chart
 archivo_values_yaml="charts/$CHART_NAME/values.yaml"
 
 # Valor nuevo de replicaCount
-replicaCount=2
+replicaCount=3
 
 # Editar el archivo YAML
 sed -i "s/replicaCount: 1/replicaCount: $replicaCount/" $archivo_values_yaml

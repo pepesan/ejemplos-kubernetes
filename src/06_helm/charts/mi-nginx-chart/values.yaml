@@ -1,4 +1,4 @@
 # Ejemplo de values.yaml
-replicaCount: 2
+replicaCount: 1
 image: nginx:latest
 namespace: default
