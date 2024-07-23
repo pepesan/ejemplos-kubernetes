@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-{{ .Chart.Name }}
+spec:
+  accessModes:
+    - {{ .Values.accessmode }}
+  selector:
+    matchLabels:
+      type: local
+  resources:
+    requests:
+      storage: {{ .Values.maxstorage }}

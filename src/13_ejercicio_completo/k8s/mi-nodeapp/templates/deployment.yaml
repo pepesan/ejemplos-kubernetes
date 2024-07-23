@@ -1,0 +1,30 @@
+# Ejemplo de templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}
+    spec:
+      containers:
+        - name: nodeapp
+          image: {{ .Values.image }}
+          ports:
+            - containerPort: {{ .Values.port }}
+          volumeMounts:
+            - name: pvc-storage-{{ .Chart.Name }}
+              mountPath: "/app/uploads"
+      volumes:
+        - name: pvc-storage-{{ .Chart.Name }}
+          # Se reclama el PersistentVolumeClaim creado anteriormente
+          persistentVolumeClaim:
+            claimName: pvc-{{ .Chart.Name }}
+

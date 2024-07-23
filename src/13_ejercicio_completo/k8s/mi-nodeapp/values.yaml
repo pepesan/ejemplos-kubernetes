@@ -1,0 +1,8 @@
+replicaCount: 2 # 2 because why not
+image: pepesan/node_upload_app:latest # la imagen que hemos creado en ../docker_scripts
+namespace: default
+port: 3000
+nodePort: 30080
+mountdir: /mnt/node-uploads
+maxstorage: 1Gi
+accessmode: ReadWriteOnce
