@@ -1,4 +1,4 @@
 #!/bin/bash
 PVC_NAME=pvc-ejemplo
-# creando un despliegue
+# borrando un pvc
 kubectl delete pvc $PVC_NAME
