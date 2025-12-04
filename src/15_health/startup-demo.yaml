@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: startup-demo
+  labels:
+    app: startup-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: startup-demo
+  template:
+    metadata:
+      labels:
+        app: startup-demo
+    spec:
+      containers:
+        - name: demo
+          image: nginx:stable
+          ports:
+            - containerPort: 80
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    # healthz: existe desde el principio (liveness)
+                    echo "OK" > /usr/share/nginx/html/healthz
+                    # readyz: tarda 20s (readiness)
+                    (sleep 20; echo "READY" > /usr/share/nginx/html/readyz) &
+                    # startupz: tarda 40s (startup)
+                    (sleep 40; echo "STARTED" > /usr/share/nginx/html/startupz) &
+          startupProbe:
+            httpGet:
+              path: /startupz
+              port: 80
+            # Tiempo máximo de arranque: 40s + margen
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 10  # 10 * 5 = 50s de ventana
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3

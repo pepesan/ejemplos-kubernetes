@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resources-demo
+  labels:
+    app: resources-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: resources-demo
+  template:
+    metadata:
+      labels:
+        app: resources-demo
+    spec:
+      containers:
+        - name: demo
+          image: nginx:stable
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "100m"      # 0.1 vCPU "reservado"
+              memory: "64Mi"   # 64 MiB "reservados"
+            limits:
+              cpu: "200m"      # máximo 0.2 vCPU
+              memory: "128Mi"  # máximo 128 MiB
