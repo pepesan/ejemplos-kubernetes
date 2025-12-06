@@ -1,9 +1,8 @@
 # Ejemplos de Kubernetes
 
-
 ## Instalación de minukube y kubectl
 ```bash
-./00_install_minikube_kubectl.sh
+./00_install_minikube_kubectl_helm.sh
 ```
 ## Lanzamiento del minukube
 ```bash
