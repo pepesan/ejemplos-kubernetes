@@ -1,5 +1,5 @@
 #!/bin/bash
-POD_NAME=mi-nginx-56f55ccddb-749hq
+POD_NAME=mi-nginx-658b8f94b6-7k9tq
 
 # ver los eventos de un pod
 kubectl events --for pod/$POD_NAME
