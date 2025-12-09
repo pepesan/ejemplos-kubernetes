@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rq-cuarta-parte
+  namespace: limitado
+spec:
+  hard:
+    requests.cpu: "1"      # Máx. 1 CPU reservada
+    limits.cpu: "1"        # Máx. 1 CPU límite
+    requests.memory: "4Gi" # Máx. 4Gi reservados
+    limits.memory: "4Gi"   # Máx. 4Gi límite
+    pods: "50"
