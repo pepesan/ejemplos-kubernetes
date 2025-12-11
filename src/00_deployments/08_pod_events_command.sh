@@ -1,5 +1,5 @@
 #!/bin/bash
-POD_NAME=mi-nginx-658b8f94b6-7k9tq
+POD_NAME=mysql-deployment-dffbcd48-hrr55
 
 # ver los eventos de un pod
 kubectl events --for pod/$POD_NAME
