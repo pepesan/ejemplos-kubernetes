@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mi-app-ingress
+  namespace: default
+  annotations:
+    # Opcional si Traefik es la clase por defecto, pero deja todo explícito
+    kubernetes.io/ingress.class: "traefik"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: miapp.local          # El dominio por el que quieres entrar
+      http:
+        paths:
+          - path: /              # Ruta de entrada
+            pathType: Prefix
+            backend:
+              service:
+                name: whoami # Nombre EXACTO del Service
+                port:
+                  number: 80     # Puerto del Service
