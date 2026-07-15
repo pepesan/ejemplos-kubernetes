@@ -26,33 +26,49 @@
             path: /
             pool: default
             size: "{{ hostvars[item].lxd_disk }}"
-        wait_for_ipv4_addresses: true
+        wait_for_ipv4_addresses: false
         timeout: 90
       loop: "{{ groups['k8s_nodes'] }}"
+
+    - name: Esperar a que el agente de LXD esté listo en la máquina virtual
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- true
+      register: lxd_agent_status
+      until: lxd_agent_status.rc == 0
+      retries: 30
+      delay: 2
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: false
 
     - name: Asegurar que el directorio .ssh existe en la máquina virtual
       ansible.builtin.command: >
         lxc exec {{ item }} -- mkdir -p /root/.ssh
       loop: "{{ groups['k8s_nodes'] }}"
-      changed_when: true
+      changed_when: false
 
     - name: Configurar permisos del directorio .ssh en la máquina virtual
       ansible.builtin.command: >
         lxc exec {{ item }} -- chmod 700 /root/.ssh
       loop: "{{ groups['k8s_nodes'] }}"
-      changed_when: true
+      changed_when: false
 
     - name: Inyectar clave pública SSH ed25519 en la máquina virtual
       ansible.builtin.command: >
         lxc file push ~/.ssh/id_ed25519.pub {{ item }}/root/.ssh/authorized_keys
       loop: "{{ groups['k8s_nodes'] }}"
-      changed_when: true
+      changed_when: false
+
+    - name: Configurar propietario root del directorio .ssh y sus archivos
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- chown -R root:root /root/.ssh
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: false
 
     - name: Configurar permisos del archivo authorized_keys en la máquina virtual
       ansible.builtin.command: >
         lxc exec {{ item }} -- chmod 600 /root/.ssh/authorized_keys
       loop: "{{ groups['k8s_nodes'] }}"
-      changed_when: true
+      changed_when: false
 
     - name: Esperar a que SSH esté disponible en el nodo
       ansible.builtin.wait_for:

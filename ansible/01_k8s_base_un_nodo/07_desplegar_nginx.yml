@@ -1,0 +1,75 @@
+---
+- name: Desplegar Nginx y verificar funcionamiento
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear namespace de prueba
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: test-nginx
+
+    - name: Desplegar Nginx (Deployment + Service NodePort)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          - apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: nginx-deployment
+              namespace: test-nginx
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: nginx
+              template:
+                metadata:
+                  labels:
+                    app: nginx
+                spec:
+                  containers:
+                  - name: nginx
+                    image: nginx:alpine
+                    ports:
+                    - containerPort: 80
+          - apiVersion: v1
+            kind: Service
+            metadata:
+              name: nginx-service
+              namespace: test-nginx
+            spec:
+              type: NodePort
+              ports:
+              - port: 80
+                targetPort: 80
+                nodePort: 32080
+              selector:
+                app: nginx
+
+    - name: Esperar a que el deployment de Nginx esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} rollout status deployment/nginx-deployment -n test-nginx --timeout=90s
+      changed_when: false
+
+    - name: Realizar petición HTTP de prueba al NodePort (32080)
+      ansible.builtin.uri:
+        url: "http://10.207.154.50:32080"
+        method: GET
+        status_code: 200
+      register: http_check
+      retries: 10
+      delay: 5
+      until: http_check.status == 200
+
+    - name: Mostrar resultado de verificación de Nginx
+      ansible.builtin.debug:
+        msg: "Verificación OK! Nginx respondiendo con código 200 en http://10.207.154.50:32080"

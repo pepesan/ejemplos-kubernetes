@@ -1,0 +1,6 @@
+# Evitar subir archivos de log de ejecución y credenciales a git
+ansible.log
+*.log
+kubeconfig.yaml
+headlamp_token.txt
+join_command.txt

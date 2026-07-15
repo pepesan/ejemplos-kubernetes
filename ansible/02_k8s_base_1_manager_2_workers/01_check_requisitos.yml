@@ -1,9 +1,15 @@
 ---
-- name: Comprobar requisitos para el nodo k8s en LXD
+- name: Comprobar requisitos para el clúster k8s en LXD
   hosts: localhost
   connection: local
   gather_facts: false
   tasks:
+    - name: Asegurar que existe el par de claves SSH (ed25519) en el host
+      ansible.builtin.openssh_keypair:
+        path: "~/.ssh/id_ed25519"
+        type: ed25519
+        comment: "k8s-lxd-host-key"
+
     - name: Asegurar que las colecciones necesarias de Ansible Galaxy estén instaladas
       community.general.ansible_galaxy_install:
         name: community.general
@@ -25,10 +31,16 @@
       register: image_list
       changed_when: false
 
-    - name: Fallar si no existe la imagen base
-      ansible.builtin.fail:
-        msg: "No existe la imagen local '{{ lxd_image }}'. Debe existir en LXD."
+    - name: Informar sobre descarga de imagen base (esto puede tardar unos minutos)
+      ansible.builtin.debug:
+        msg: "La imagen local '{{ lxd_image }}' no existe. Descargando e importando Ubuntu 26.04 VM desde los repositorios oficiales de LXD..."
       when: lxd_image not in image_list.stdout_lines
+
+    - name: Descargar e importar la imagen base Ubuntu 26.04 VM
+      ansible.builtin.command: >
+        lxc image copy ubuntu:26.04 local: --alias {{ lxd_image }} --vm
+      when: lxd_image not in image_list.stdout_lines
+      changed_when: true
 
     - name: Listar redes LXD
       ansible.builtin.command: lxc network list -f csv

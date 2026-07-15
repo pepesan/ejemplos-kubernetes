@@ -1,0 +1,101 @@
+---
+- name: Inicializar Plano de Control (Manager)
+  hosts: control_plane
+  gather_facts: true
+  tasks:
+    - name: Comprobar si Kubernetes ya está inicializado
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_admin_conf
+
+    - name: Asegurar que el directorio /etc/kubernetes existe
+      ansible.builtin.file:
+        path: /etc/kubernetes
+        state: directory
+        mode: "0755"
+      when: not kubeadm_admin_conf.stat.exists
+
+    - name: Crear archivo de configuración de kubeadm
+      ansible.builtin.copy:
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: "{{ ansible_host }}"
+          nodeRegistration:
+            name: "{{ inventory_hostname }}"
+            criSocket: unix:///var/run/containerd/containerd.sock
+            imagePullPolicy: IfNotPresent
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: ClusterConfiguration
+          networking:
+            podSubnet: "{{ k8s_pod_network_cidr }}"
+          ---
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          failSwapOn: false
+          cgroupDriver: systemd
+          featureGates:
+            KubeletInUserNamespace: true
+        dest: /etc/kubernetes/kubeadm-config.yaml
+        mode: "0644"
+      when: not kubeadm_admin_conf.stat.exists
+
+    - name: Inicializar el plano de control con kubeadm
+      ansible.builtin.command: >
+        kubeadm init
+        --config /etc/kubernetes/kubeadm-config.yaml
+        --ignore-preflight-errors=SystemVerification,Swap
+      register: kubeadm_init_output
+      when: not kubeadm_admin_conf.stat.exists
+      changed_when: true
+
+    - name: Crear directorio .kube para el usuario root
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: "0755"
+
+    - name: Copiar configuración de admin.conf a .kube/config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: true
+        mode: "0600"
+
+    - name: Instalar CNI Flannel
+      ansible.builtin.command: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      register: flannel_install
+      changed_when: "'created' in flannel_install.stdout or 'configured' in flannel_install.stdout"
+
+    - name: Descargar admin.conf a la máquina local (kubeconfig.yaml)
+      ansible.builtin.fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ playbook_dir }}/kubeconfig.yaml"
+        flat: true
+
+    - name: Generar comando de unión para los workers
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: join_command_raw
+      changed_when: false
+
+    - name: Guardar comando de unión en archivo local
+      ansible.builtin.copy:
+        content: "{{ join_command_raw.stdout }}"
+        dest: "{{ playbook_dir }}/join_command.txt"
+        mode: "0600"
+      delegate_to: localhost
+
+    - name: Mostrar instrucciones para usar kubectl desde el host
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡KUBECONFIG DESCARGADA EN EL HOST!"
+          - "  "
+          - "  Para usar kubectl desde tu máquina física (host), ejecuta:"
+          - "  export KUBECONFIG={{ playbook_dir }}/kubeconfig.yaml"
+          - "  "
+          - "  Prueba la conexión ejecutando:"
+          - "  kubectl get nodes"
+          - "════════════════════════════════════════════════════════════════"

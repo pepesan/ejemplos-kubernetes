@@ -1,0 +1,90 @@
+---
+- name: Desplegar Longhorn en Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Etiquetar los nodos workload
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} label node {{ item }} node.longhorn.io/workload-node=true --overwrite
+      loop: "{{ groups['workload_workers'] }}"
+      changed_when: true
+
+    - name: Etiquetar los nodos storage para Longhorn
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} label node {{ item }} node.longhorn.io/storage-node=true node.longhorn.io/create-default-disk=true --overwrite
+      loop: "{{ groups['storage_workers'] }}"
+      changed_when: true
+
+    - name: Aplicar taints de almacenamiento a los nodos storage
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} taint node {{ item }} storage-node=true:NoSchedule
+      loop: "{{ groups['storage_workers'] }}"
+      register: taint_out
+      failed_when:
+        - taint_out.rc != 0
+        - "'already has' not in taint_out.stderr"
+      changed_when: "'tainted' in taint_out.stdout"
+
+    - name: Agregar el repositorio de Longhorn a Helm
+      ansible.builtin.command: helm repo add longhorn https://charts.longhorn.io --force-update
+      changed_when: false
+
+    - name: Actualizar repositorios de Helm
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: Crear namespace longhorn-system si no existe
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: longhorn-system
+
+    - name: Instalar o actualizar Longhorn usando Helm
+      ansible.builtin.command: >
+        helm upgrade --install longhorn longhorn/longhorn
+        --namespace longhorn-system
+        --kubeconfig {{ kubeconfig_path }}
+        --set defaultSettings.createDefaultDiskLabeledNodes=true
+        --set defaultSettings.defaultReplicaCount=3
+        --set persistence.defaultClass=true
+        --set persistence.defaultClassReplicaCount=3
+        --set defaultSettings.taintToleration="storage-node=true:NoSchedule"
+        --set longhornManager.tolerations[0].key=storage-node
+        --set longhornManager.tolerations[0].operator=Equal
+        --set-string longhornManager.tolerations[0].value=true
+        --set longhornManager.tolerations[0].effect=NoSchedule
+        --set service.ui.type=NodePort
+        --set service.ui.nodePort=32085
+      changed_when: false
+
+    - name: Esperar a que Longhorn Manager esté listo en nodos de cómputo y almacenamiento
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} rollout status daemonset/longhorn-manager -n longhorn-system --timeout=300s
+      changed_when: false
+
+    - name: Esperar a que el deployment de la interfaz de Longhorn esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} rollout status deployment/longhorn-ui -n longhorn-system --timeout=180s
+      changed_when: false
+
+    - name: Mostrar datos de acceso al Panel de Longhorn
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡LONGHORN DESPLEGADO CON ÉXITO!"
+          - "  "
+          - "  Panel de Administración de Longhorn: http://10.207.154.50:32085"
+          - "  "
+          - "  StorageClass por defecto: 'longhorn'"
+          - "  Número de réplicas configurado: 3 (óptimo para 3 workers de storage)"
+          - "  "
+          - "  Taints aplicados a nodos de storage: storage-node=true:NoSchedule"
+          - "  Discos por defecto limitados a nodos etiquetados como storage."
+          - "════════════════════════════════════════════════════════════════"

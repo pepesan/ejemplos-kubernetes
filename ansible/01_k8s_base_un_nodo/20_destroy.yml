@@ -9,10 +9,19 @@
         name: "{{ item }}"
         type: virtual-machine
         state: absent
+        force_stop: true
         timeout: 30
       loop: "{{ groups['k8s_nodes'] }}"
 
+    - name: Eliminar archivos locales temporales del clúster
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/{{ item }}"
+        state: absent
+      loop:
+        - kubeconfig.yaml
+        - headlamp_token.txt
+
     - name: Confirmación de eliminación
       ansible.builtin.debug:
-        msg: "El nodo Kubernetes LXD {{ item }} ha sido eliminado con éxito."
+        msg: "El nodo Kubernetes LXD {{ item }} ha sido eliminado con éxito y los archivos locales han sido limpiados."
       loop: "{{ groups['k8s_nodes'] }}"

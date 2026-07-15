@@ -3,7 +3,7 @@
 ansible_user: root
 ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 
-# Parámetros del nodo virtual LXD
+# Parámetros del nodo virtual LXD (La plantilla 'k8s-template' debe estar basada en Ubuntu 26.04)
 lxd_image: k8s-template
 lxd_network: lxdbr0
 

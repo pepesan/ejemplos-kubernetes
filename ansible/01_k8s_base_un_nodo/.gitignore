@@ -1,3 +1,5 @@
 # Evitar subir archivos de log de ejecución a git
 ansible.log
 *.log
+kubeconfig.yaml
+headlamp_token.txt

@@ -1,0 +1,77 @@
+---
+- name: Instalar y Configurar Containerd (CRI)
+  hosts: k8s_nodes
+  gather_facts: true
+  tasks:
+    - name: Instalar paquetes previos (ca-certificates, curl, gnupg)
+      ansible.builtin.apt:
+        name: [ca-certificates, curl, gnupg]
+        state: present
+        update_cache: true
+        lock_timeout: 300
+
+    - name: Crear el directorio de claves APT
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Descargar la clave GPG de Docker
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Añadir el repositorio oficial de Docker
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture'] }}
+          signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable
+        filename: docker
+        state: present
+        update_cache: true
+
+    - name: Instalar containerd.io
+      ansible.builtin.apt:
+        name: containerd.io
+        state: present
+        lock_timeout: 300
+
+    - name: Crear directorio de configuración de containerd
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: "0755"
+
+    - name: Generar configuración por defecto de containerd
+      ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+      register: containerd_config_gen
+
+    - name: Habilitar SystemdCgroup en la configuración de containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+      register: containerd_config_replace
+
+    - name: Habilitar el plugin CRI en containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'disabled_plugins = \["cri"\]'
+        replace: 'disabled_plugins = []'
+      register: containerd_cri_enable
+
+    - name: Arrancar y habilitar el servicio de containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: started
+        enabled: true
+
+    - name: Reiniciar containerd si la configuración cambió
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+      when: containerd_config_gen.changed or containerd_config_replace.changed or containerd_cri_enable.changed

@@ -79,3 +79,22 @@
       register: taint_remove
       changed_when: "'untainted' in taint_remove.stdout"
       failed_when: false # Ignorar si ya está libre del taint
+
+    - name: Descargar admin.conf a la máquina local (kubeconfig.yaml)
+      ansible.builtin.fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ playbook_dir }}/kubeconfig.yaml"
+        flat: true
+
+    - name: Mostrar instrucciones para usar kubectl desde el host
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡KUBECONFIG DESCARGADA EN EL HOST!"
+          - "  "
+          - "  Para usar kubectl desde tu máquina física (host), ejecuta:"
+          - "  export KUBECONFIG={{ playbook_dir }}/kubeconfig.yaml"
+          - "  "
+          - "  Prueba la conexión ejecutando:"
+          - "  kubectl get nodes"
+          - "════════════════════════════════════════════════════════════════"

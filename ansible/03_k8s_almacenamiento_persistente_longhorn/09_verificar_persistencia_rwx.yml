@@ -1,0 +1,113 @@
+---
+- name: Verificar Almacenamiento Persistente RWX con Longhorn
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear namespace de prueba para persistencia
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: test-persistence
+
+    - name: Crear PVC de prueba para ReadWriteMany (RWX)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          - apiVersion: v1
+            kind: PersistentVolumeClaim
+            metadata:
+              name: longhorn-pvc-rwx
+              namespace: test-persistence
+            spec:
+              accessModes:
+                - ReadWriteMany
+              storageClassName: longhorn
+              resources:
+                requests:
+                  storage: 1Gi
+
+    - name: Esperar a que el PVC RWX esté aprovisionado por Longhorn
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get pvc longhorn-pvc-rwx -n test-persistence -o jsonpath='{.status.phase}'
+      register: rwx_pvc_status
+      until: rwx_pvc_status.stdout == 'Bound'
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Crear Deployment de prueba que usa el PVC RWX
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          - apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: test-rwx-writer
+              namespace: test-persistence
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: rwx-writer
+              template:
+                metadata:
+                  labels:
+                    app: rwx-writer
+                spec:
+                  containers:
+                  - name: writer
+                    image: alpine
+                    command: ["/bin/sh", "-c"]
+                    args:
+                    - >
+                      while true; do
+                        echo "$(date): Hola desde el pod ${HOSTNAME}" >> /mnt/shared-data/pod-logs.txt;
+                        sleep 5;
+                      done
+                    volumeMounts:
+                    - name: shared-vol
+                      mountPath: /mnt/shared-data
+                  volumes:
+                  - name: shared-vol
+                    persistentVolumeClaim:
+                      claimName: longhorn-pvc-rwx
+
+    - name: Esperar a que el deployment de test-rwx-writer esté completamente listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} rollout status deployment/test-rwx-writer -n test-persistence --timeout=600s
+      changed_when: false
+
+    - name: Pausar 15 segundos para permitir que los pods escriban en el archivo compartido
+      ansible.builtin.pause:
+        seconds: 15
+
+    - name: Obtener el nombre de uno de los pods escritores
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get pods -n test-persistence -l app=rwx-writer -o jsonpath='{.items[0].metadata.name}'
+      register: pod_name_check
+      changed_when: false
+
+    - name: Comprobar el contenido del archivo de logs compartido leyendo desde el pod
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} exec -n test-persistence {{ pod_name_check.stdout }} -- cat /mnt/shared-data/pod-logs.txt
+      register: log_file_content
+      changed_when: false
+
+    - name: Mostrar el contenido del archivo compartido en Longhorn
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡VERIFICACIÓN DE ALMACENAMIENTO LONGHORN RWX EXITOSA!"
+          - "  El archivo de logs compartido contiene las siguientes líneas:"
+          - "  "
+          - "{{ log_file_content.stdout_lines }}"
+          - "════════════════════════════════════════════════════════════════"

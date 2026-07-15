@@ -13,7 +13,10 @@ Este laboratorio contiene una serie de playbooks de Ansible para desplegar un no
 *   **`04_instalar_containerd.yml`**: Instalación del Container Runtime Interface (CRI).
 *   **`05_instalar_k8s_tools.yml`**: Instalación de `kubeadm`, `kubelet` y `kubectl` desde repositorios oficiales.
 *   **`06_inicializar_cluster.yml`**: Inicialización del clúster con `kubeadm`, instalación de Flannel CNI y remoción de Taints para despliegue mono-nodo.
-*   **`07_destroy.yml`**: Eliminación del contenedor para limpieza rápida.
+*   **`07_desplegar_nginx.yml`**: Despliegue de un contenedor Nginx y verificación de acceso local.
+*   **`08_despliegue_helm.yml`**: Instalación de Apache en un namespace de pruebas utilizando Helm.
+*   **`09_desplegar_headlamp.yml`**: Despliegue del dashboard web Headlamp vía Helm, con token de administración persistente.
+*   **`20_destroy.yml`**: Eliminación del contenedor para limpieza rápida.
 
 ## 🚀 Uso del Laboratorio
 
@@ -41,3 +44,17 @@ Este laboratorio contiene una serie de playbooks de Ansible para desplegar un no
     ```bash
     ./destroy_all.sh
     ```
+
+## 🖥️ Acceso al Dashboard (Headlamp)
+
+Una vez completado el despliegue mediante `./run_all.sh` (o ejecutando el playbook individual `09_desplegar_headlamp.yml`), tendrás disponible el dashboard web de desarrollo **Headlamp**:
+
+*   **URL de Acceso:** [http://10.207.154.50:32082](http://10.207.154.50:32082)
+*   **Token de Acceso:** Para iniciar sesión con privilegios totales de administrador, copia el token generado automáticamente en el archivo local [headlamp_token.txt](file:///home/pepesan/IdeaProjects/ejemplos-kubernetes/ansible/01_k8s_base_un_nodo/headlamp_token.txt).
+    Puedes ver su contenido ejecutando:
+    ```bash
+    cat headlamp_token.txt
+    ```
+
+> [!NOTE]
+> Este token se genera dinámicamente usando la API `TokenRequest` de Kubernetes con una validez de 1 año (8760 horas), garantizando plena compatibilidad con las directivas de seguridad de Kubernetes v1.36. Tanto el token como la configuración del clúster están protegidos e ignorados por Git mediante [.gitignore](file:///home/pepesan/IdeaProjects/ejemplos-kubernetes/ansible/01_k8s_base_un_nodo/.gitignore).

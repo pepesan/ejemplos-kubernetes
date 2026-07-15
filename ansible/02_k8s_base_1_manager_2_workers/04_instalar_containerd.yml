@@ -1,5 +1,5 @@
 ---
-- name: Instalar y Configurar Containerd (CRI)
+- name: Instalar y Configurar Containerd (CRI) en todos los nodos
   hosts: k8s_nodes
   gather_facts: true
   tasks:
@@ -46,16 +46,32 @@
 
     - name: Generar configuración por defecto de containerd
       ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
-      changed_when: true
+      args:
+        creates: /etc/containerd/config.toml
+      register: containerd_config_gen
 
     - name: Habilitar SystemdCgroup en la configuración de containerd
       ansible.builtin.replace:
         path: /etc/containerd/config.toml
         regexp: 'SystemdCgroup = false'
         replace: 'SystemdCgroup = true'
+      register: containerd_config_replace
+
+    - name: Habilitar el plugin CRI en containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'disabled_plugins = \["cri"\]'
+        replace: 'disabled_plugins = []'
+      register: containerd_cri_enable
 
     - name: Arrancar y habilitar el servicio de containerd
       ansible.builtin.systemd:
         name: containerd
-        state: restarted
+        state: started
         enabled: true
+
+    - name: Reiniciar containerd si la configuración cambió
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+      when: containerd_config_gen.changed or containerd_config_replace.changed or containerd_cri_enable.changed

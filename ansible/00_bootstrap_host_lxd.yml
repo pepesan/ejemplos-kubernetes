@@ -1,0 +1,137 @@
+---
+- name: Inicializar y Configurar LXD en el Host Local
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    lxd_network_name: "lxdbr0"
+    lxd_network_subnet: "10.207.154.1/24"
+    lxd_storage_pool_name: "default"
+    host_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: 0. Asegurar que existe el par de claves SSH (ed25519) en el host
+      # Se requiere para permitir que el host se conecte sin contraseña como root
+      # a todas las VMs LXD creadas para el clúster.
+      ansible.builtin.openssh_keypair:
+        path: "~/.ssh/id_ed25519"
+        type: ed25519
+        comment: "k8s-lxd-host-key"
+      become: false
+
+    - name: 1. Instalar dependencias del sistema (snapd, curl, python libraries)
+      # Explicación de dependencias:
+      # - snapd: Necesario para instalar LXD y herramientas CLI de Kubernetes (kubectl, helm).
+      # - curl: Utilidad básica de red para descargas y llamadas a APIs externas.
+      # - python3-kubernetes: Biblioteca de Python requerida por el módulo 'kubernetes.core.k8s' de Ansible
+      #   para interactuar con la API del clúster de Kubernetes de forma nativa.
+      # - python3-jsonpatch: Requerido por Ansible para realizar parches dinámicos en los manifiestos K8s.
+      #   sin este paquete, tareas de modificación de recursos de Kubernetes fallarán.
+      # - python3-yaml: Requerido por la colección kubernetes.core para parsear archivos YAML.
+      ansible.builtin.apt:
+        name:
+          - snapd
+          - curl
+          - python3-kubernetes
+          - python3-jsonpatch
+          - python3-yaml
+        state: present
+        update_cache: true
+
+    - name: 2. Cargar módulos de kernel requeridos en el Host
+      # overlay y br_netfilter son necesarios en el host y en los nodos para habilitar el motor de contenedores
+      # (CRI / containerd) y el enrutamiento de red de los bridges CNI (Flannel/CNI0).
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: 3. Asegurar que los módulos de kernel se carguen en el arranque del Host
+      ansible.builtin.copy:
+        content: |
+          overlay
+          br_netfilter
+        dest: /etc/modules-load.d/k8s-lxd-host.conf
+        mode: '0644'
+
+    - name: 4. Instalar LXD, kubectl y helm a través de Snap
+      # Explicación de paquetes snap:
+      # - lxd: El hipervisor que levantará las máquinas virtuales que actúan de nodos.
+      # - kubectl: La interfaz de línea de comandos de Kubernetes usada en el host físico
+      #   para controlar y validar el clúster a través del archivo kubeconfig descargado.
+      # - helm: El gestor de paquetes de Kubernetes que nos permite desplegar las aplicaciones
+      #   del clúster (Longhorn, Headlamp, etc.) de forma estandarizada.
+      community.general.snap:
+        name: "{{ item.name }}"
+        state: present
+        classic: "{{ item.classic | default(omit) }}"
+      loop:
+        - { name: "lxd" }
+        - { name: "kubectl", classic: true }
+        - { name: "helm", classic: true }
+
+    - name: 5. Comprobar si LXD ya está inicializado
+      ansible.builtin.command: lxc network show "{{ lxd_network_name }}"
+      register: lxd_net_check
+      changed_when: false
+      failed_when: false
+
+    - name: 6. Inicializar LXD mediante Preseed (Configuración no interactiva)
+      ansible.builtin.shell: |
+        cat <<EOF | lxd init --preseed
+        config: {}
+        networks:
+        - config:
+            ipv4.address: {{ lxd_network_subnet }}
+            ipv4.nat: "true"
+            ipv6.address: none
+          description: "Red gestionada para laboratorios Kubernetes"
+          name: {{ lxd_network_name }}
+          type: bridge
+        storage_pools:
+        - config: {}
+          description: "Pool de almacenamiento por defecto"
+          name: {{ lxd_storage_pool_name }}
+          driver: dir
+        profiles:
+        - config: {}
+          description: "Perfil por defecto para maquinas LXD"
+          devices:
+            eth0:
+              name: eth0
+              network: {{ lxd_network_name }}
+              type: nic
+            root:
+              path: /
+              pool: {{ lxd_storage_pool_name }}
+              type: disk
+          name: default
+        EOF
+      when: lxd_net_check.rc != 0
+      changed_when: true
+
+    - name: 7. Añadir el usuario del host al grupo lxd para permitir comandos lxc sin sudo
+      ansible.builtin.user:
+        name: "{{ host_user }}"
+        groups: lxd
+        append: true
+      register: user_group_update
+
+    - name: 8. Mostrar recordatorio de permisos y herramientas
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡HOST PREPARADO CON ÉXITO!"
+          - "  "
+          - "  1. LXD instalado e inicializado con la red:"
+          - "     {{ lxd_network_name }} ({{ lxd_network_subnet }})"
+          - "  2. Herramientas locales instaladas en el Host:"
+          - "     - kubectl (CLI de Kubernetes)"
+          - "     - helm (Gestor de paquetes de Kubernetes)"
+          - "  "
+          - "  El usuario '{{ host_user }}' ha sido añadido al grupo 'lxd'."
+          - "  IMPORTANTE: Cierra y abre de nuevo tu terminal (o ejecuta 'newgrp lxd')"
+          - "  para aplicar los permisos del grupo y ejecutar comandos lxc sin sudo."
+          - "════════════════════════════════════════════════════════════════"
