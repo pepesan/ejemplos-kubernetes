@@ -1,0 +1,3 @@
+# Evitar subir archivos de log de ejecución a git
+ansible.log
+*.log

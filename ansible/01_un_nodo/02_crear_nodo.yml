@@ -1,0 +1,68 @@
+---
+- name: Crear el nodo LXD para Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Crear/actualizar máquina virtual LXD para el nodo k8s
+      community.general.lxd_container:
+        name: "{{ item }}"
+        type: virtual-machine
+        state: started
+        source:
+          type: image
+          alias: "{{ lxd_image }}"
+        config:
+          limits.cpu: "{{ hostvars[item].lxd_cpu | string }}"
+          limits.memory: "{{ hostvars[item].lxd_mem }}"
+        devices:
+          eth0:
+            type: nic
+            network: "{{ lxd_network }}"
+            name: eth0
+            "ipv4.address": "{{ hostvars[item].ansible_host }}"
+          root:
+            type: disk
+            path: /
+            pool: default
+            size: "{{ hostvars[item].lxd_disk }}"
+        wait_for_ipv4_addresses: true
+        timeout: 90
+      loop: "{{ groups['k8s_nodes'] }}"
+
+    - name: Asegurar que el directorio .ssh existe en la máquina virtual
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- mkdir -p /root/.ssh
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: true
+
+    - name: Configurar permisos del directorio .ssh en la máquina virtual
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- chmod 700 /root/.ssh
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: true
+
+    - name: Inyectar clave pública SSH ed25519 en la máquina virtual
+      ansible.builtin.command: >
+        lxc file push ~/.ssh/id_ed25519.pub {{ item }}/root/.ssh/authorized_keys
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: true
+
+    - name: Configurar permisos del archivo authorized_keys en la máquina virtual
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- chmod 600 /root/.ssh/authorized_keys
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: true
+
+    - name: Esperar a que SSH esté disponible en el nodo
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        delay: 2
+        timeout: 60
+      loop: "{{ groups['k8s_nodes'] }}"
+
+    - name: Nodo creado y accesible por SSH
+      ansible.builtin.debug:
+        msg: "Nodo {{ item }} creado con IP {{ hostvars[item].ansible_host }}"
+      loop: "{{ groups['k8s_nodes'] }}"

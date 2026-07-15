@@ -1,0 +1,81 @@
+---
+- name: Inicializar Clúster Kubernetes
+  hosts: k8s_nodes
+  gather_facts: true
+  tasks:
+    - name: Comprobar si Kubernetes ya está inicializado
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_admin_conf
+
+    - name: Asegurar que el directorio /etc/kubernetes existe
+      ansible.builtin.file:
+        path: /etc/kubernetes
+        state: directory
+        mode: "0755"
+      when: not kubeadm_admin_conf.stat.exists
+
+    - name: Crear archivo de configuración de kubeadm con failSwapOn=false
+      ansible.builtin.copy:
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: "{{ ansible_host }}"
+          nodeRegistration:
+            name: "{{ inventory_hostname }}"
+            criSocket: unix:///var/run/containerd/containerd.sock
+            imagePullPolicy: IfNotPresent
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: ClusterConfiguration
+          networking:
+            podSubnet: "{{ k8s_pod_network_cidr }}"
+          ---
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          failSwapOn: false
+          cgroupDriver: systemd
+          featureGates:
+            KubeletInUserNamespace: true
+        dest: /etc/kubernetes/kubeadm-config.yaml
+        mode: "0644"
+      when: not kubeadm_admin_conf.stat.exists
+
+    - name: Inicializar el plano de control con kubeadm
+      ansible.builtin.command: >
+        kubeadm init
+        --config /etc/kubernetes/kubeadm-config.yaml
+        --ignore-preflight-errors=SystemVerification,Swap
+      register: kubeadm_init_output
+      when: not kubeadm_admin_conf.stat.exists
+      changed_when: true
+
+    - name: Mostrar salida de kubeadm init
+      ansible.builtin.debug:
+        var: kubeadm_init_output.stdout_lines
+      when: not kubeadm_admin_conf.stat.exists
+
+    - name: Crear directorio .kube para el usuario root
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: "0755"
+
+    - name: Copiar configuración de admin.conf a .kube/config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: true
+        mode: "0600"
+
+    - name: Instalar CNI Flannel
+      ansible.builtin.command: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      register: flannel_install
+      changed_when: "'created' in flannel_install.stdout or 'configured' in flannel_install.stdout"
+
+    - name: Permitir que los pods se ejecuten en el nodo de control (Single Node Cluster)
+      ansible.builtin.command: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+      register: taint_remove
+      changed_when: "'untainted' in taint_remove.stdout"
+      failed_when: false # Ignorar si ya está libre del taint

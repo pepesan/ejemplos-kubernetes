@@ -1,0 +1,50 @@
+---
+- name: Desplegar Chart de Helm de prueba y verificar
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Agregar el repositorio oficial de Bitnami a Helm
+      ansible.builtin.command: helm repo add bitnami https://charts.bitnami.com/bitnami
+      register: repo_add
+      changed_when: "'has been added' in repo_add.stdout or 'already exists' in repo_add.stdout"
+
+    - name: Actualizar repositorios de Helm
+      ansible.builtin.command: helm repo update
+      changed_when: true
+
+    - name: Instalar Apache usando Helm en namespace test-helm
+      ansible.builtin.command: >
+        helm upgrade --install my-apache bitnami/apache
+        --namespace test-helm
+        --create-namespace
+        --set service.type=NodePort
+        --set service.nodePorts.http=32081
+        --set image.repository=bitnamilegacy/apache
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: helm_install
+      changed_when: "'STATUS: deployed' in helm_install.stdout"
+
+    - name: Esperar a que el deployment de Apache esté listo
+      ansible.builtin.command: >
+        kubectl rollout status deployment/my-apache -n test-helm --timeout=90s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Realizar petición HTTP de prueba a Apache NodePort (32081)
+      ansible.builtin.uri:
+        url: "http://10.207.154.50:32081"
+        method: GET
+        status_code: 200
+      register: apache_check
+      retries: 10
+      delay: 5
+      until: apache_check.status == 200
+
+    - name: Mostrar resultado de verificación de Helm
+      ansible.builtin.debug:
+        msg: "Helm OK! Apache de Bitnami respondiendo con código 200 en http://10.207.154.50:32081"
