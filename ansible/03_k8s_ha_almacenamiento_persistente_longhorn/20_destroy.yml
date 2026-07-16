@@ -11,7 +11,7 @@
         state: absent
         force_stop: true
         timeout: 30
-      loop: "{{ groups['k8s_nodes'] }}"
+      loop: "{{ groups['k8s_nodes'] | union(groups['new_workers'] | default([])) }}"
 
     - name: Eliminar archivos locales temporales del clúster
       ansible.builtin.file:

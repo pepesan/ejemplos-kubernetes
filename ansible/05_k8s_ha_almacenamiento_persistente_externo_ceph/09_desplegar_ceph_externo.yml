@@ -4,9 +4,29 @@
   become: true
   gather_facts: true
   tasks:
+    - name: Crear el grupo 'ceph' con GID 167 (requerido por cephadm y los contenedores de Ceph)
+      ansible.builtin.group:
+        name: ceph
+        gid: 167
+        system: true
+        state: present
+
+    - name: Crear el usuario 'ceph' con UID 167 (requerido por cephadm y los contenedores de Ceph)
+      ansible.builtin.user:
+        name: ceph
+        uid: 167
+        group: ceph
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+        state: present
+
     - name: Añadir el repositorio de Ceph
       ansible.builtin.apt:
-        name: cephadm
+        name:
+          - cephadm
+          - python3-ceph-common
+          - ceph-common
         state: present
         update_cache: true
         lock_timeout: 300
@@ -94,9 +114,9 @@
       changed_when: true
 
     - name: Esperar a que se aprovisionen los OSDs (mínimo 3 OSDs listos)
-      ansible.builtin.command: ceph osd stat
+      ansible.builtin.command: ceph osd stat -f json
       register: osd_stat
-      until: "'3 osds: 3 up, 3 in' in osd_stat.stdout"
+      until: (osd_stat.stdout | from_json).num_up_osds >= 3 and (osd_stat.stdout | from_json).num_in_osds >= 3
       retries: 30
       delay: 10
       changed_when: false

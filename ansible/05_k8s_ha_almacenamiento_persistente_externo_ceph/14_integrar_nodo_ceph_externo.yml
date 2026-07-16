@@ -14,13 +14,64 @@
       become: false
       run_once: true
 
-    - name: Instalar python3 y LVM2 en el nuevo nodo Ceph
+    - name: Crear el grupo 'ceph' con GID 167 (requerido por cephadm y los contenedores de Ceph)
+      ansible.builtin.group:
+        name: ceph
+        gid: 167
+        system: true
+        state: present
+
+    - name: Crear el usuario 'ceph' con UID 167 (requerido por cephadm y los contenedores de Ceph)
+      ansible.builtin.user:
+        name: ceph
+        uid: 167
+        group: ceph
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+        state: present
+
+    - name: Instalar cephadm y requisitos (python3, LVM2, motor de contenedores) en el nuevo nodo Ceph
       ansible.builtin.apt:
         name:
-          - python3
+          - cephadm
+          - python3-ceph-common
+          - ceph-common
           - lvm2
         state: present
         update_cache: true
+        lock_timeout: 300
+
+    - name: Asegurar que el daemon de SSH está activo y configurado
+      ansible.builtin.systemd:
+        name: ssh
+        state: started
+        enabled: true
+
+- name: Leer clave SSH pública de Ceph desde el monitor
+  hosts: ceph_monitors
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Leer clave SSH pública generada por Ceph
+      ansible.builtin.slurp:
+        src: /etc/ceph/ceph.pub
+      register: ceph_pub_key_b64
+
+    - name: Guardar clave pública de Ceph en memoria
+      ansible.builtin.set_fact:
+        ceph_ssh_key: "{{ ceph_pub_key_b64.content | b64decode }}"
+
+- name: Distribuir clave SSH de Ceph al nuevo nodo OSD
+  hosts: new_ceph_osds
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Añadir clave SSH de Ceph a authorized_keys
+      ansible.builtin.authorized_key:
+        user: root
+        state: present
+        key: "{{ hostvars[groups['ceph_monitors'][0]]['ceph_ssh_key'] }}"
 
 - name: Registrar e integrar el nuevo OSD en el clúster Ceph Externo
   hosts: ceph_monitors
@@ -31,15 +82,28 @@
       ansible.builtin.command: >
         ceph orch host add {{ item }} {{ hostvars[item].ansible_host }}
       loop: "{{ groups['new_ceph_osds'] | default([]) }}"
-      failed_when: false
-      changed_when: true
+      register: host_add_out
+      failed_when:
+        - host_add_out.rc != 0
+        - "'already exists' not in host_add_out.stderr"
+      changed_when: "'Added host' in host_add_out.stdout"
 
     - name: Instruir a Ceph a escanear y aprovisionar OSDs en el nuevo nodo
       ansible.builtin.command: >
         ceph orch device ls {{ item }} --refresh
       loop: "{{ groups['new_ceph_osds'] | default([]) }}"
-      failed_when: false
       changed_when: true
+
+    - name: Esperar a que se aprovisione el OSD en el/los nuevo(s) nodo(s)
+      ansible.builtin.command: ceph osd tree -f json
+      register: new_osd_tree
+      until: >
+        (new_osd_tree.stdout | from_json).nodes
+        | selectattr('name', 'in', groups['new_ceph_osds'] | default([]))
+        | list | length >= groups['new_ceph_osds'] | default([]) | length
+      retries: 60
+      delay: 15
+      changed_when: false
 
 - name: Finalización de la integración Ceph Externo en Escenario 05
   hosts: localhost

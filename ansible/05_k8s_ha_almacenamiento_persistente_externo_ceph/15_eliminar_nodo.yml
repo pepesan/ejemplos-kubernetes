@@ -46,18 +46,10 @@
           failed_when: false
       when: is_k8s_node
 
-    # ================= SECCIÓN CEPH EXTERNO =================
-    - name: Eliminar y purgar OSD en el clúster Ceph Externo
-      block:
-        - name: Retirar host de la orquestación de Ceph
-          ansible.builtin.command: >
-            ceph orch host rm {{ node_name }} --force
-          delegate_to: "{{ groups['ceph_monitors'][0] }}"
-          failed_when: false
-          changed_when: true
-      when: is_ceph_node and groups['ceph_monitors'] is defined and groups['ceph_monitors'] | length > 0
-
     # ================= SECCIÓN INFRAESTRUCTURA (LXD) =================
+    # Se destruye la VM ANTES de purgar Ceph: 'ceph osd purge' no aplica de forma
+    # duradera mientras el demonio del OSD siga vivo (aunque esté marcado 'out'
+    # con --force), solo "cuaja" una vez el demonio ha dejado de responder.
     - name: Comprobar si la VM de LXD existe
       ansible.builtin.command: >
         lxc info {{ node_name }}
@@ -72,6 +64,62 @@
         force_stop: true
         timeout: 30
       when: lxc_check.rc == 0
+
+    # ================= SECCIÓN CEPH EXTERNO =================
+    - name: Eliminar y purgar OSD en el clúster Ceph Externo
+      block:
+        - name: Obtener los IDs de los OSD de Ceph alojados en el nodo a eliminar
+          ansible.builtin.command: >
+            ceph osd ls-tree {{ node_name }}
+          register: node_osd_ids
+          failed_when: false
+          changed_when: false
+
+        - name: Marcar como 'out' los OSD del nodo a eliminar
+          ansible.builtin.command: >
+            ceph osd out {{ item }}
+          loop: "{{ node_osd_ids.stdout_lines | default([]) }}"
+          when: node_osd_ids.rc == 0
+          failed_when: false
+          changed_when: true
+
+        - name: Purgar del CRUSH map, auth y osdmap los OSD del nodo a eliminar
+          ansible.builtin.command: >
+            ceph osd purge {{ item }} --force --yes-i-really-mean-it
+          loop: "{{ node_osd_ids.stdout_lines | default([]) }}"
+          register: osd_purge_out
+          until: osd_purge_out.rc == 0
+          retries: 10
+          delay: 5
+          when: node_osd_ids.rc == 0
+          failed_when: false
+          changed_when: true
+
+        - name: Eliminar el demonio de monitor (mon) si el orquestador desplegó uno en este host
+          ansible.builtin.command: >
+            ceph orch daemon rm mon.{{ node_name }} --force
+          failed_when: false
+          changed_when: true
+
+        - name: Retirar host de la orquestación de Ceph (la VM ya está destruida, por eso --offline)
+          ansible.builtin.command: >
+            ceph orch host rm {{ node_name }} --offline --force
+          failed_when: false
+          changed_when: true
+
+        - name: Eliminar el bucket CRUSH vacío del host (ya sin OSDs)
+          ansible.builtin.command: >
+            ceph osd crush rm {{ node_name }}
+          register: crush_rm_out
+          until: crush_rm_out.rc == 0 or 'does not exist' in crush_rm_out.stderr
+          retries: 10
+          delay: 5
+          failed_when: false
+          changed_when: true
+      delegate_to: "{{ groups['ceph_monitors'][0] }}"
+      vars:
+        ansible_connection: ssh
+      when: is_ceph_node and groups['ceph_monitors'] is defined and groups['ceph_monitors'] | length > 0
 
     - name: Eliminar el volumen de almacenamiento OSD de Ceph en LXD (si es de almacenamiento)
       ansible.builtin.command: >

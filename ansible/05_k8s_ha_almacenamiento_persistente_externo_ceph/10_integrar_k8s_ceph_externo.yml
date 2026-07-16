@@ -4,6 +4,18 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Crear el pool RBD para los volúmenes de Kubernetes
+      ansible.builtin.command: ceph osd pool create rbd-k8s
+      register: rbd_pool_create
+      failed_when:
+        - rbd_pool_create.rc != 0
+        - "'already exists' not in rbd_pool_create.stderr"
+      changed_when: "'created pool' in rbd_pool_create.stdout"
+
+    - name: Inicializar el pool como pool de aplicación RBD
+      ansible.builtin.command: rbd pool init rbd-k8s
+      changed_when: false
+
     - name: Obtener FSID del clúster Ceph
       ansible.builtin.command: ceph fsid
       register: ceph_fsid_raw
@@ -60,6 +72,23 @@
         repo_url: https://ceph.github.io/ceph-csi-operator
         force_update: true
 
+    - name: Instalar el operador de Ceph CSI (CRDs y controlador)
+      kubernetes.core.helm:
+        name: ceph-csi-operator
+        chart_ref: ceph-csi-operator/ceph-csi-operator
+        release_namespace: ceph-csi
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig_path }}"
+
+    - name: Esperar a que las CRDs de Ceph CSI estén disponibles
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get crd drivers.csi.ceph.io
+      register: crd_check
+      until: crd_check.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
     - name: Instalar los controladores de Ceph CSI en Kubernetes
       kubernetes.core.helm:
         name: ceph-csi-drivers
@@ -67,12 +96,17 @@
         release_namespace: ceph-csi
         kubeconfig: "{{ kubeconfig_path }}"
         values:
-          # Configurar la conexión al monitor Ceph externo
-          configMap:
-            create: true
-            clusterID: "{{ ceph_fsid }}"
-            monitors:
-              - "{{ ceph_mon_ip }}:6789"
+          # Configurar la conexión al Ceph externo vía las CRDs CephConnection/ClientProfile
+          # (el chart ceph-csi-operator/ceph-csi-drivers ya no usa un ConfigMap plano).
+          cephConnections:
+            - name: "{{ ceph_fsid }}"
+              monitors:
+                mon-a: "{{ ceph_mon_ip }}:6789"
+              rbdMirrorDaemonCount: 1
+          clientProfiles:
+            - name: "{{ ceph_fsid }}"
+              cephConnection:
+                name: "{{ ceph_fsid }}"
         server_side: true
         force_conflicts: true
 
@@ -87,13 +121,13 @@
             name: ceph-block-external
             annotations:
               storageclass.kubernetes.io/is-default-class: "true"
-          provisioner: ceph-csi.rbd.csi.ceph.com
+          provisioner: rbd.csi.ceph.com
           reclaimPolicy: Delete
           allowVolumeExpansion: true
           volumeBindingMode: Immediate
           parameters:
             clusterID: "{{ ceph_fsid }}"
-            pool: device_health_metrics  # Pool por defecto en Ceph, o pool personalizado
+            pool: rbd-k8s
             imageFormat: "2"
             imageFeatures: layering
             csi.storage.k8s.io/provisioner-secret-name: csi-ceph-secret

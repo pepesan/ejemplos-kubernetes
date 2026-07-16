@@ -11,7 +11,7 @@
     - name: Comprobar si existen las VMs en LXD
       ansible.builtin.command: >
         lxc info {{ item }}
-      loop: "{{ groups['all_nodes'] }}"
+      loop: "{{ groups['all_nodes'] | union(groups['new_workers'] | default([])) | union(groups['new_ceph_osds'] | default([])) }}"
       register: lxc_check
       failed_when: false
       changed_when: false
@@ -20,13 +20,15 @@
       community.general.lxd_container:
         name: "{{ item.item }}"
         state: absent
+        force_stop: true
+        timeout: 30
       loop: "{{ lxc_check.results }}"
       when: item.rc == 0
 
     - name: Eliminar volúmenes de disco OSD de Ceph en LXD
       ansible.builtin.command: >
         lxc storage volume delete default {{ item }}-ceph-osd
-      loop: "{{ groups['ceph_osds'] }}"
+      loop: "{{ groups['ceph_osds'] | union(groups['new_ceph_osds'] | default([])) }}"
       failed_when: false
       changed_when: true
 
@@ -39,6 +41,7 @@
         - "{{ playbook_dir }}/join_command.txt"
         - "{{ playbook_dir }}/certificate_key.txt"
         - "{{ playbook_dir }}/headlamp_token.txt"
+        - "{{ playbook_dir }}/ceph_dashboard_password.txt"
 
     - name: Mostrar finalización
       ansible.builtin.debug:
