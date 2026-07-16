@@ -1,0 +1,100 @@
+---
+- name: Crear los nodos LXD para el clúster Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Consultar los volúmenes de almacenamiento custom existentes en el pool default
+      community.general.lxd_storage_volume_info:
+        pool: default
+        type: custom
+      register: lxd_ceph_volumes_info
+
+    - name: Crear volumen de almacenamiento Ceph OSD en LXD para los workers que no lo tengan aún
+      ansible.builtin.command: >
+        lxc storage volume create default {{ item }}-ceph-disk --type=block size={{ hostvars[item].lxd_ceph_disk }}
+      loop: "{{ groups['workers'] }}"
+      when: (item ~ '-ceph-disk') not in (lxd_ceph_volumes_info.storage_volumes | map(attribute='name') | list)
+      changed_when: true
+
+    - name: Crear/actualizar máquinas virtuales LXD para los nodos k8s
+      community.general.lxd_container:
+        name: "{{ item }}"
+        type: virtual-machine
+        state: started
+        source:
+          type: image
+          alias: "{{ lxd_image }}"
+        config:
+          limits.cpu: "{{ hostvars[item].lxd_cpu | string }}"
+          limits.memory: "{{ hostvars[item].lxd_mem }}"
+        devices: "{{ base_devices | combine(ceph_device) }}"
+        wait_for_ipv4_addresses: false
+        timeout: 90
+      loop: "{{ groups['k8s_nodes'] }}"
+      vars:
+        base_devices:
+          eth0:
+            type: nic
+            network: "{{ lxd_network }}"
+            name: eth0
+            "ipv4.address": "{{ hostvars[item].ansible_host }}"
+          root:
+            type: disk
+            path: /
+            pool: default
+            size: "{{ hostvars[item].lxd_disk }}"
+        ceph_device: "{{ {'ceph-disk': {'type': 'disk', 'pool': 'default', 'source': item ~ '-ceph-disk'}} if hostvars[item].lxd_ceph_disk is defined else {} }}"
+
+    - name: Esperar a que el agente de LXD esté listo en las máquinas virtuales
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- true
+      register: lxd_agent_status
+      until: lxd_agent_status.rc == 0
+      retries: 30
+      delay: 2
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: false
+
+    - name: Asegurar que el directorio .ssh existe en las máquinas virtuales
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- mkdir -p /root/.ssh
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: false
+
+    - name: Configurar permisos del directorio .ssh en las máquinas virtuales
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- chmod 700 /root/.ssh
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: false
+
+    - name: Inyectar clave pública SSH ed25519 en las máquinas virtuales
+      ansible.builtin.command: >
+        lxc file push ~/.ssh/id_ed25519.pub {{ item }}/root/.ssh/authorized_keys
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: false
+
+    - name: Configurar propietario root del directorio .ssh y sus archivos
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- chown -R root:root /root/.ssh
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: false
+
+    - name: Configurar permisos del archivo authorized_keys en las máquinas virtuales
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- chmod 600 /root/.ssh/authorized_keys
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: false
+
+    - name: Esperar a que SSH esté disponible en los nodos
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        delay: 2
+        timeout: 60
+      loop: "{{ groups['k8s_nodes'] }}"
+
+    - name: Nodos creados y accesibles por SSH
+      ansible.builtin.debug:
+        msg: "Nodo {{ item }} creado con IP {{ hostvars[item].ansible_host }}"
+      loop: "{{ groups['k8s_nodes'] }}"

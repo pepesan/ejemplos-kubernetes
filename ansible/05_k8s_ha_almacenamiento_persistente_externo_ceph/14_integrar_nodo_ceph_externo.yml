@@ -1,0 +1,55 @@
+---
+- name: Configurar requerimientos de Ceph en el nuevo OSD
+  hosts: new_ceph_osds
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Validar que existe el grupo new_ceph_osds en el inventario y no está vacío
+      ansible.builtin.fail:
+        msg: >
+          No hay nodos Ceph OSD definidos para integrar. Este playbook asume que ya se ha
+          ejecutado 13_add_node.yml y que la VM del nuevo nodo ya existe.
+      when: "'new_ceph_osds' not in groups or groups['new_ceph_osds'] | length == 0"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Instalar python3 y LVM2 en el nuevo nodo Ceph
+      ansible.builtin.apt:
+        name:
+          - python3
+          - lvm2
+        state: present
+        update_cache: true
+
+- name: Registrar e integrar el nuevo OSD en el clúster Ceph Externo
+  hosts: ceph_monitors
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Añadir el nuevo nodo host al clúster Ceph (vía cephadm)
+      ansible.builtin.command: >
+        ceph orch host add {{ item }} {{ hostvars[item].ansible_host }}
+      loop: "{{ groups['new_ceph_osds'] | default([]) }}"
+      failed_when: false
+      changed_when: true
+
+    - name: Instruir a Ceph a escanear y aprovisionar OSDs en el nuevo nodo
+      ansible.builtin.command: >
+        ceph orch device ls {{ item }} --refresh
+      loop: "{{ groups['new_ceph_osds'] | default([]) }}"
+      failed_when: false
+      changed_when: true
+
+- name: Finalización de la integración Ceph Externo en Escenario 05
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Mostrar resumen del proceso
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡NUEVO NODO INTEGRADO EN EL CLÚSTER CEPH EXTERNO!"
+          - "  "
+          - "  Nodos Ceph OSD agregados: {{ groups['new_ceph_osds'] | default([]) | join(', ') }}"
+          - "════════════════════════════════════════════════════════════════"

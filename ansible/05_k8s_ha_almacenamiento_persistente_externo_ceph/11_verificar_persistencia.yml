@@ -1,0 +1,99 @@
+---
+- name: Verificar Almacenamiento Persistente RBD con Ceph Externo
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear namespace de prueba para persistencia Ceph
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: test-ceph-external-persistence
+
+    - name: Crear PVC para RBD (ceph-block-external)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: rbd-pvc-external
+            namespace: test-ceph-external-persistence
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+            storageClassName: ceph-block-external
+
+    - name: Esperar a que el PVC esté Bound
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        kind: PersistentVolumeClaim
+        name: rbd-pvc-external
+        namespace: test-ceph-external-persistence
+      register: pvc_info
+      until: "pvc_info.resources[0].status.phase == 'Bound'"
+      retries: 30
+      delay: 5
+
+    - name: Crear Pod escritor para probar RBD
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: rbd-writer-pod
+            namespace: test-ceph-external-persistence
+          spec:
+            containers:
+              - name: writer
+                image: alpine
+                command: ["/bin/sh", "-c", "echo 'Hola desde Ceph Externo en el pod' > /mnt/data/test.txt && sleep 3600"]
+                volumeMounts:
+                  - name: my-volume
+                    mountPath: /mnt/data
+            volumes:
+              - name: my-volume
+                persistentVolumeClaim:
+                  claimName: rbd-pvc-external
+
+    - name: Esperar a que el Pod escritor esté en ejecución
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        kind: Pod
+        name: rbd-writer-pod
+        namespace: test-ceph-external-persistence
+      register: pod_info
+      until: "pod_info.resources[0].status.phase == 'Running'"
+      retries: 30
+      delay: 5
+
+    - name: Verificar lectura del archivo en RBD
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} exec rbd-writer-pod -n test-ceph-external-persistence -- cat /mnt/data/test.txt
+      register: cat_out
+      changed_when: false
+      failed_when:
+        - cat_out.rc != 0
+        - "'Hola desde Ceph' not in cat_out.stdout"
+
+    - name: Mostrar resultados de verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡VERIFICACIÓN DE ALMACENAMIENTO CEPH EXTERNO EXITOSA!"
+          - "  "
+          - "  1) Lectura de volumen RBD (RWO):"
+          - "     Contenido: '{{ cat_out.stdout | trim }}'"
+          - "════════════════════════════════════════════════════════════════"

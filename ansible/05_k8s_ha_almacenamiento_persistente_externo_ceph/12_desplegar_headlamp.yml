@@ -1,5 +1,5 @@
 ---
-- name: Desplegar Headlamp Dashboard
+- name: Desplegar Headlamp Dashboard en el Clúster K8s (Ceph Externo)
   hosts: localhost
   connection: local
   gather_facts: false
@@ -7,26 +7,28 @@
     kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
   tasks:
     - name: Agregar el repositorio de Headlamp a Helm
-      ansible.builtin.command: helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/ --force-update
-      changed_when: false
-
-    - name: Actualizar repositorios de Helm
-      ansible.builtin.command: helm repo update
-      changed_when: false
+      kubernetes.core.helm_repository:
+        name: headlamp
+        repo_url: https://kubernetes-sigs.github.io/headlamp/
+        force_update: true
 
     - name: Instalar Headlamp usando Helm en namespace headlamp
-      ansible.builtin.command: >
-        helm upgrade --install headlamp headlamp/headlamp
-        --namespace headlamp
-        --create-namespace
-        --kubeconfig {{ kubeconfig_path }}
-        --set service.type=NodePort
-        --set service.nodePort=32082
-      changed_when: false
+      kubernetes.core.helm:
+        name: headlamp
+        chart_ref: headlamp/headlamp
+        release_namespace: headlamp
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig_path }}"
+        values:
+          service:
+            type: NodePort
+            nodePort: 32082
+        server_side: true
+        force_conflicts: true
 
     - name: Esperar a que el deployment de Headlamp esté listo
       ansible.builtin.command: >
-        kubectl --kubeconfig={{ kubeconfig_path }} rollout status deployment/headlamp -n headlamp --timeout=90s
+        kubectl --kubeconfig={{ kubeconfig_path }} rollout status deployment/headlamp -n headlamp --timeout=120s
       changed_when: false
 
     - name: Crear ServiceAccount y ClusterRoleBinding para Headlamp
@@ -75,10 +77,11 @@
       ansible.builtin.debug:
         msg:
           - "════════════════════════════════════════════════════════════════"
-          - "  Headlamp Dashboard listo!"
-          - "  URL de acceso: http://{{ hostvars[groups['k8s_nodes'][0]].ansible_host }}:32082"
+          - "  ¡HEADLAMP DASHBOARD INSTALADO CON ÉXITO!"
           - "  "
-          - "  El token de inicio de sesión ha sido guardado de forma segura en:"
+          - "  URL de acceso (vía VIP): http://{{ k8s_vip_address }}:32082"
+          - "  "
+          - "  El token de acceso administrador ha sido guardado de forma segura en:"
           - "  {{ playbook_dir }}/headlamp_token.txt"
           - "  "
           - "  Para consultar o regenerar el token manualmente:"

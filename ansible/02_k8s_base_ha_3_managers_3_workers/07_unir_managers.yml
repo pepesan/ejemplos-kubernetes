@@ -1,0 +1,77 @@
+---
+- name: Unir los managers adicionales al plano de control HA
+  hosts: additional_managers
+  gather_facts: false
+  tasks:
+    - name: Comprobar si el nodo ya forma parte del clúster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_admin_conf
+
+    - name: Comprobar si el manifiesto estático de kube-vip ya existe
+      ansible.builtin.stat:
+        path: /etc/kubernetes/manifests/kube-vip.yaml
+      register: kube_vip_manifest
+
+    - name: Asegurar que el directorio /etc/kubernetes/manifests existe
+      ansible.builtin.file:
+        path: /etc/kubernetes/manifests
+        state: directory
+        mode: "0755"
+      when: not kube_vip_manifest.stat.exists
+
+    - name: Descargar la imagen de kube-vip vía containerd
+      ansible.builtin.command: >
+        ctr image pull {{ kube_vip_image }}
+      when: not kube_vip_manifest.stat.exists
+      changed_when: true
+
+    - name: Generar el manifiesto estático de kube-vip para este manager
+      ansible.builtin.shell: >
+        ctr run --rm --net-host {{ kube_vip_image }} vip
+        /kube-vip manifest pod
+        --interface {{ k8s_vip_interface }}
+        --address {{ k8s_vip_address }}
+        --port {{ k8s_vip_port }}
+        --controlplane --services --arp --leaderElection
+        > /etc/kubernetes/manifests/kube-vip.yaml
+      when: not kube_vip_manifest.stat.exists
+      changed_when: true
+
+    - name: Leer comando de unión desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ inventory_dir }}/join_command.txt"
+      register: join_cmd_b64
+      delegate_to: localhost
+
+    - name: Leer certificate-key desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ inventory_dir }}/certificate_key.txt"
+      register: cert_key_b64
+      delegate_to: localhost
+
+    - name: Unir este manager al plano de control
+      ansible.builtin.command: >
+        {{ (join_cmd_b64.content | b64decode) | trim }}
+        --control-plane
+        --certificate-key {{ (cert_key_b64.content | b64decode) | trim }}
+        --ignore-preflight-errors=SystemVerification,Swap
+      when: not kubeadm_admin_conf.stat.exists
+      changed_when: true
+
+    - name: Crear directorio .kube para el usuario root
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: "0755"
+
+    - name: Copiar configuración de admin.conf a .kube/config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: true
+        mode: "0600"
+
+    - name: Mostrar resultado de la unión del manager
+      ansible.builtin.debug:
+        msg: "Manager {{ inventory_hostname }} unido al plano de control HA."

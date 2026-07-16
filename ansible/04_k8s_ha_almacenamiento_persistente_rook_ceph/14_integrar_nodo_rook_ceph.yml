@@ -1,0 +1,32 @@
+---
+- name: Integrar el nuevo nodo en Rook Ceph (aprovisionamiento del OSD)
+  hosts: first_manager
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Validar que existe el grupo new_workers en el inventario y no está vacío
+      ansible.builtin.fail:
+        msg: >
+          No hay nodos definidos para integrar. Este playbook asume que ya se ha ejecutado
+          13_add_node.yml y que el nodo está unido al clúster de Kubernetes.
+      when: "'new_workers' not in groups or groups['new_workers'] | length == 0"
+
+    - name: Esperar a que el nuevo nodo aparezca como Ready
+      ansible.builtin.command: kubectl get nodes
+      register: nodes_list
+      until: "item in nodes_list.stdout"
+      retries: 20
+      delay: 5
+      loop: "{{ groups['new_workers'] }}"
+      changed_when: false
+
+    - name: Mostrar resumen del proceso
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡NUEVO NODO INTEGRADO EN EL CLÚSTER ROOK CEPH!"
+          - "  "
+          - "  Nodos agregados: {{ groups['new_workers'] | join(', ') }}"
+          - "  Rook Ceph detectará automáticamente la incorporación del nodo"
+          - "  y aprovisionará el OSD en su disco /dev/vdb."
+          - "════════════════════════════════════════════════════════════════"

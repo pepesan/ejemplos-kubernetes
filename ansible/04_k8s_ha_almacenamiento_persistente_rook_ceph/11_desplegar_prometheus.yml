@@ -1,0 +1,126 @@
+---
+- name: Desplegar Prometheus y conectarlo al Ceph Dashboard
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Desplegar el pod toolbox de Rook Ceph (cliente ceph con credenciales admin)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: rook-ceph-tools
+            namespace: rook-ceph
+            labels:
+              app: rook-ceph-tools
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: rook-ceph-tools
+            template:
+              metadata:
+                labels:
+                  app: rook-ceph-tools
+              spec:
+                initContainers:
+                  - name: generar-ceph-conf
+                    image: quay.io/ceph/ceph:v20.2.2
+                    command: ["/bin/bash", "-c"]
+                    args:
+                      - |
+                        set -e
+                        cat > /etc/ceph/ceph.conf <<CONF
+                        [global]
+                        mon_host = $(echo "$ROOK_MON_ENDPOINTS" | sed 's/[a-z]=//g')
+                        CONF
+                        cat > /etc/ceph/keyring <<KEYRING
+                        [client.admin]
+                        key = $ROOK_CEPH_SECRET
+                        KEYRING
+                    env:
+                      - name: ROOK_CEPH_SECRET
+                        valueFrom:
+                          secretKeyRef:
+                            name: rook-ceph-mon
+                            key: ceph-secret
+                      - name: ROOK_MON_ENDPOINTS
+                        valueFrom:
+                          configMapKeyRef:
+                            name: rook-ceph-mon-endpoints
+                            key: data
+                    volumeMounts:
+                      - name: ceph-config
+                        mountPath: /etc/ceph
+                containers:
+                  - name: rook-ceph-tools
+                    image: quay.io/ceph/ceph:v20.2.2
+                    command: ["/bin/bash", "-c", "sleep infinity"]
+                    volumeMounts:
+                      - name: ceph-config
+                        mountPath: /etc/ceph
+                volumes:
+                  - name: ceph-config
+                    emptyDir: {}
+
+    - name: Esperar a que el toolbox de Ceph esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph rollout status deployment/rook-ceph-tools --timeout=90s
+      changed_when: false
+
+    - name: Agregar el repositorio de Prometheus Community a Helm
+      kubernetes.core.helm_repository:
+        name: prometheus-community
+        repo_url: https://prometheus-community.github.io/helm-charts
+        force_update: true
+
+    - name: Instalar o actualizar Prometheus usando Helm (mínimo, sin Alertmanager/Grafana)
+      kubernetes.core.helm:
+        name: prometheus
+        chart_ref: prometheus-community/prometheus
+        release_namespace: monitoring
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig_path }}"
+        values:
+          alertmanager:
+            enabled: false
+          prometheus-pushgateway:
+            enabled: false
+          server:
+            persistentVolume:
+              enabled: false
+          extraScrapeConfigs: |
+            - job_name: 'rook-ceph-mgr'
+              honor_labels: true
+              static_configs:
+                - targets: ['rook-ceph-mgr.rook-ceph.svc.cluster.local:9283']
+
+    - name: Esperar a que Prometheus esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n monitoring rollout status deployment/prometheus-server --timeout=180s
+      changed_when: false
+
+    - name: Configurar en el Ceph Dashboard la URL de la API de Prometheus (host y puerto incluidos)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph exec deploy/rook-ceph-tools --
+        ceph dashboard set-prometheus-api-host http://prometheus-server.monitoring.svc.cluster.local:80
+      changed_when: true
+
+    - name: Mostrar datos de éxito
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡PROMETHEUS DESPLEGADO Y CONECTADO AL CEPH DASHBOARD!"
+          - "  "
+          - "  Namespace: monitoring"
+          - "  Scrape target: rook-ceph-mgr.rook-ceph.svc.cluster.local:9283"
+          - "  "
+          - "  El pod 'rook-ceph-tools' en el namespace rook-ceph queda desplegado"
+          - "  de forma permanente para poder ejecutar comandos 'ceph' manualmente:"
+          - "  kubectl --kubeconfig=kubeconfig.yaml -n rook-ceph exec -it deploy/rook-ceph-tools -- ceph -s"
+          - "════════════════════════════════════════════════════════════════"

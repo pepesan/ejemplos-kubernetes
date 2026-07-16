@@ -32,7 +32,7 @@
 
     - name: Realizar petición HTTP de prueba a Apache NodePort (32081)
       ansible.builtin.uri:
-        url: "http://10.207.154.50:32081"
+        url: "http://{{ hostvars[groups['k8s_nodes'][0]].ansible_host }}:32081"
         method: GET
         status_code: 200
       register: apache_check
@@ -42,4 +42,4 @@
 
     - name: Mostrar resultado de verificación de Helm
       ansible.builtin.debug:
-        msg: "Helm OK! Apache de Bitnami respondiendo con código 200 en http://10.207.154.50:32081"
+        msg: "Helm OK! Apache de Bitnami respondiendo con código 200 en http://{{ hostvars[groups['k8s_nodes'][0]].ansible_host }}:32081"

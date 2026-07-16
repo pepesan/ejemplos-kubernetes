@@ -38,6 +38,16 @@
         state: present
         update_cache: true
 
+    - name: 1b. Asegurar que las colecciones necesarias de Ansible Galaxy estén instaladas y actualizadas en el host
+      community.general.ansible_galaxy_install:
+        name: "{{ item }}"
+        type: collection
+        state: latest
+      loop:
+        - community.general
+        - kubernetes.core
+      become: false
+
     - name: 2. Cargar módulos de kernel requeridos en el Host
       # overlay y br_netfilter son necesarios en el host y en los nodos para habilitar el motor de contenedores
       # (CRI / containerd) y el enrutamiento de red de los bridges CNI (Flannel/CNI0).
@@ -119,7 +129,20 @@
         append: true
       register: user_group_update
 
-    - name: 8. Mostrar recordatorio de permisos y herramientas
+    - name: 8. Listar imágenes LXD locales en el host
+      ansible.builtin.command: lxc image list -f csv -c l
+      register: image_list
+      changed_when: false
+      become: false
+
+    - name: 9. Descargar e importar la imagen base Ubuntu 26.04 VM en LXD
+      ansible.builtin.command: >
+        lxc image copy ubuntu:26.04 local: --alias k8s-template --vm
+      when: "'k8s-template' not in image_list.stdout_lines"
+      changed_when: true
+      become: false
+
+    - name: 10. Mostrar recordatorio de permisos y herramientas
       ansible.builtin.debug:
         msg:
           - "════════════════════════════════════════════════════════════════"
@@ -127,7 +150,8 @@
           - "  "
           - "  1. LXD instalado e inicializado con la red:"
           - "     {{ lxd_network_name }} ({{ lxd_network_subnet }})"
-          - "  2. Herramientas locales instaladas en el Host:"
+          - "  2. Imagen base VM Ubuntu 26.04 importada con alias 'k8s-template'"
+          - "  3. Herramientas locales instaladas en el Host:"
           - "     - kubectl (CLI de Kubernetes)"
           - "     - helm (Gestor de paquetes de Kubernetes)"
           - "  "

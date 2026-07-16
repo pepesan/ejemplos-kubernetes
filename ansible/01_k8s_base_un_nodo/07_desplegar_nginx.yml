@@ -62,7 +62,7 @@
 
     - name: Realizar petición HTTP de prueba al NodePort (32080)
       ansible.builtin.uri:
-        url: "http://10.207.154.50:32080"
+        url: "http://{{ hostvars[groups['k8s_nodes'][0]].ansible_host }}:32080"
         method: GET
         status_code: 200
       register: http_check
@@ -72,4 +72,4 @@
 
     - name: Mostrar resultado de verificación de Nginx
       ansible.builtin.debug:
-        msg: "Verificación OK! Nginx respondiendo con código 200 en http://10.207.154.50:32080"
+        msg: "Verificación OK! Nginx respondiendo con código 200 en http://{{ hostvars[groups['k8s_nodes'][0]].ansible_host }}:32080"

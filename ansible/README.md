@@ -66,52 +66,80 @@ chmod +x run_all.sh destroy_all.sh
 ./destroy_all.sh   # Para limpiar y borrar todo
 ```
 
-### 2. Despliegue Multi-Nodo (k8s base) (`02_k8s_base_1_manager_2_workers`)
-Ubicación: [02_k8s_base_1_manager_2_workers/](02_k8s_base_1_manager_2_workers/)
+### 2. Despliegue Multi-Nodo HA (k8s base) (`02_k8s_base_ha_3_managers_3_workers`)
+Ubicación: [02_k8s_base_ha_3_managers_3_workers/](02_k8s_base_ha_3_managers_3_workers/)
 
-Este ejemplo levanta un clúster de Kubernetes de producción local completo con 3 máquinas virtuales LXD:
-*   `k8s-manager` (`10.207.154.50`): Nodo del plano de control.
-*   `k8s-worker1` (`10.207.154.51`): Nodo trabajador 1.
-*   `k8s-worker2` (`10.207.154.52`): Nodo trabajador 2.
+Este ejemplo levanta un clúster de Kubernetes de alta disponibilidad (HA) con 6 máquinas virtuales LXD, sin punto único de fallo en el plano de control:
+*   `k8s-manager1/2/3` (`10.207.154.50-52`): Plano de control (3 réplicas).
+*   `k8s-worker1/2/3` (`10.207.154.53-55`): Nodos trabajadores.
+*   **VIP `10.207.154.49:6443`**: dirección virtual gestionada por **kube-vip** (pod estático con ARP + leader-election en cada manager) que expone el API server de forma estable, sin importar qué manager esté activo.
 
 Automatiza:
-*   La creación de las 3 VMs e inyección de claves SSH.
+*   La creación de las 6 VMs e inyección de claves SSH.
 *   La configuración del sistema operativo y container runtime (`containerd`) en todos los nodos.
-*   La inicialización de `kubeadm` en el Manager.
-*   La compartición dinámica del token y la unión de los 2 workers.
+*   La inicialización de `kubeadm` en el primer manager con `--control-plane-endpoint` apuntando al VIP y `--upload-certs`.
+*   La unión de los 2 managers adicionales al plano de control vía `--certificate-key`.
+*   La unión dinámica de los 3 workers vía el VIP.
 *   El despliegue de una app web con 2 réplicas balanceándose entre workers.
-*   El despliegue de Headlamp Dashboard en el puerto `32082` del Manager.
+*   Una **prueba de resiliencia HA** dedicada: parar y recuperar un worker, y parar y recuperar el manager que hizo el `kubeadm init` inicial, verificando que el VIP conmuta y que el clúster nunca deja de responder.
+*   El despliegue de Headlamp Dashboard en el puerto `32082`, accesible vía el VIP.
 
 Uso rápido:
 ```bash
-cd 02_k8s_base_1_manager_2_workers
+cd 02_k8s_base_ha_3_managers_3_workers
 chmod +x run_all.sh destroy_all.sh
 ./run_all.sh       # Para desplegar
 ./destroy_all.sh   # Para limpiar y borrar todo
 ```
 
-### 3. Almacenamiento Compartido NFS (ReadWriteMany) (`03_k8s_almacenamiento_persistente_nfs`)
-Ubicación: [03_k8s_almacenamiento_persistente_nfs/](03_k8s_almacenamiento_persistente_nfs/)
+### 3. Almacenamiento Distribuido Replicado con Longhorn (`03_k8s_ha_almacenamiento_persistente_longhorn`)
+Ubicación: [03_k8s_ha_almacenamiento_persistente_longhorn/](03_k8s_ha_almacenamiento_persistente_longhorn/)
 
-Este ejemplo levanta un clúster multi-nodo completo junto con un nodo de almacenamiento externo dedicado en LXD:
-*   `k8s-manager` (`10.207.154.50`): Control Plane.
-*   `k8s-worker1` (`10.207.154.51`): Nodo trabajador 1.
-*   `k8s-worker2` (`10.207.154.52`): Nodo trabajador 2.
-*   `k8s-storage` (`10.207.154.55`): Servidor NFS de almacenamiento externo compartido.
+Este laboratorio despliega un clúster de Kubernetes HA avanzado de 8 nodos virtuales sobre LXD (basado en el 02: 3 managers, 2 workload workers, 3 storage dedicados), reutilizando vía `import_playbook` los pasos base de infraestructura y bootstrap del laboratorio 02.
+
+Utiliza Longhorn como motor de almacenamiento de bloques y sistema de archivos distribuido nativo de Kubernetes para dar soporte a volúmenes persistentes multi-nodo (ReadWriteMany - RWX) y mono-nodo (ReadWriteOnce - RWO) con tolerancia a fallos mediante replicación en 3 vías.
 
 Automatiza:
-*   La creación de las 4 VMs y su correspondiente configuración de SSH root.
-*   Instalación y configuración del servidor `nfs-kernel-server` en `k8s-storage` y el cliente `nfs-common` en todos los nodos de K8s.
-*   Despliegue del CSI driver de NFS (`nfs-subdir-external-provisioner`) vía Helm como la StorageClass por defecto (`nfs-client`).
-*   Verificación de almacenamiento ReadWriteMany (RWX) mediante un deployment con 2 réplicas escribiendo de forma concurrente en un archivo compartido en el NFS.
+*   La creación de 8 VMs LXD (3 managers, 2 workload workers, 3 storage) e inyección de claves SSH.
+*   Configuración del sistema operativo, container runtime (`containerd`), `open-iscsi` y `nfs-common` en todos los nodos de K8s.
+*   Inicialización de kubeadm HA (kube-vip) y unión de los nodos del clúster.
+*   Instalación de Longhorn vía Helm optimizando taints y tolerancias para restringir los datos replicados únicamente a los 3 nodos storage dedicados.
+*   Verificación del almacenamiento ReadWriteMany (RWX) montando un archivo de logs compartido entre dos pods escritores que corren en los workers.
+*   Exposición del panel de administración de Longhorn a través de NodePort (puerto `32085`, accesible vía la VIP).
 
 Uso rápido:
 ```bash
-cd 03_k8s_almacenamiento_persistente_nfs
+cd 03_k8s_ha_almacenamiento_persistente_longhorn
 chmod +x run_all.sh destroy_all.sh
 ./run_all.sh       # Para desplegar
 ./destroy_all.sh   # Para limpiar y borrar todo
 ```
+
+### 4. Almacenamiento Rook Ceph Hiperconvergente (`04_k8s_ha_almacenamiento_persistente_rook_ceph`)
+Ubicación: [04_k8s_ha_almacenamiento_persistente_rook_ceph/](04_k8s_ha_almacenamiento_persistente_rook_ceph/)
+
+Este ejemplo levanta un clúster HA completo con 6 VMs (basado en el 02: 3 managers + 3 workers), reutilizando vía `import_playbook` los pasos base de infraestructura y bootstrap del laboratorio 02. Cada worker cuenta con un disco virtual secundario de 20GB. Despliega el operador Rook para autogestionar un clúster de Ceph directamente sobre Kubernetes.
+
+Automatiza:
+*   La creación de 6 VMs LXD, inyección de claves SSH y adición en caliente del disco secundario `ceph-disk` en los workers.
+*   Instalación de las herramientas de K8s, inicialización HA (kube-vip) y unión del clúster.
+*   Instalación del operador de Rook Ceph y configuración del clúster Ceph (`CephCluster`).
+*   Creación de StorageClasses predeterminadas para RBD (RWO) y CephFS (RWX).
+*   Verificación de almacenamiento RBD y CephFS compartidos mediante pods escritores de prueba.
+*   Despliegue de Prometheus conectado al Ceph Dashboard.
+
+Uso rápido:
+```bash
+cd 04_k8s_ha_almacenamiento_persistente_rook_ceph
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
+### 5. Clúster Ceph Externo e Independiente (`05_k8s_ha_almacenamiento_persistente_externo_ceph`)
+Ubicación: [05_k8s_ha_almacenamiento_persistente_externo_ceph/](05_k8s_ha_almacenamiento_persistente_externo_ceph/)
+
+Este laboratorio despliega un clúster de Kubernetes HA (basado en el 02: 3 managers + 3 workers) y un clúster Ceph externo formado por 3 nodos de almacenamiento (OSDs) independientes sobre VMs LXD, gestionados de forma externa e integrados a través de drivers de Ceph CSI en Kubernetes.
 
 ---
 
@@ -121,7 +149,12 @@ En este proyecto se han adoptado las siguientes directivas y decisiones técnica
 
 ### 1. Política de Distribución de Cargas de Trabajo (Workloads)
 *   **Mono-Nodo (`01_k8s_base_un_nodo`):** Dado que solo existe una máquina (`k8s-single`), se elimina el "taint" del plano de control (`node-role.kubernetes.io/control-plane-`) para permitir que la máquina aloje tanto el control-plane como los pods de usuario.
-*   **Multi-Nodo (`02_k8s_base_1_manager_2_workers`):** Se mantiene el diseño estándar de producción. **El nodo Manager (`k8s-manager`) está estrictamente dedicado al plano de control** y conserva su "taint" (`NoSchedule`) por defecto. **Todas las cargas de trabajo de usuario se despliegan y balancean obligatoriamente en los nodos trabajadores (`k8s-worker1` y `k8s-worker2`)**.
+*   **Multi-Nodo HA (`02_k8s_base_ha_3_managers_3_workers`):** Se mantiene el diseño estándar de producción. **Los 3 nodos Manager están estrictamente dedicados al plano de control** y conservan su "taint" (`NoSchedule`) por defecto. **Todas las cargas de trabajo de usuario se despliegan y balancean obligatoriamente en los 3 nodos trabajadores**.
+
+### 1.1. Alta Disponibilidad del Plano de Control (kube-vip)
+*   **Decisión:** El plano de control se expone tras una VIP (`10.207.154.49:6443`) gestionada por **kube-vip**, ejecutado como pod estático en cada uno de los 3 managers (ARP + leader-election), en vez de un balanceador externo tipo HAProxy/Keepalived en VMs dedicadas.
+*   **Justificación:** Es el patrón más extendido hoy en día para HA de `kubeadm` en entornos on-prem/bare-metal (guías oficiales de `kubeadm`, Cluster API bare-metal, Talos, k3s/RKE2), y evita levantar infraestructura de balanceo adicional: la VIP la gestionan los propios managers. El primer manager inicializa el clúster con `kubeadm init --control-plane-endpoint --upload-certs`; los managers adicionales se unen con `kubeadm join --control-plane --certificate-key`. El laboratorio `02` incluye una prueba de resiliencia dedicada que para y recupera un worker y el manager que hizo el `kubeadm init` inicial, verificando que el VIP conmuta y el clúster nunca deja de responder.
+*   **Reutilización:** Los laboratorios 03, 04 y 05 se basan en este clúster HA reutilizando sus playbooks de infraestructura y bootstrap vía `import_playbook`, en vez de duplicarlos.
 
 ### 2. Idempotencia Rigurosa en Ansible
 Todos los playbooks han sido optimizados para cumplir con el principio de idempotencia (volver a ejecutar un playbook en un clúster activo no realiza cambios ni reporta estados modificados falsos):
@@ -133,8 +166,17 @@ Todos los playbooks han sido optimizados para cumplir con el principio de idempo
 ### 3. Persistencia y Seguridad del Dashboard
 *   **Dashboard Moderno (Headlamp):** Se despliega mediante Helm y se expone por `NodePort` (puerto `32082`).
 *   **TokenRequest API:** Para garantizar compatibilidad con Kubernetes v1.36 y evitar errores de validación de emisor (`iss`), se generan tokens dinámicos con una duración de 1 año (8760 horas) asociados al ServiceAccount del dashboard.
-*   **Seguridad de Git:** Tanto el token (`headlamp_token.txt`) como el archivo `kubeconfig.yaml` están excluidos del control de versiones mediante `.gitignore` en cada laboratorio.
+*   **Seguridad de Git:** El token (`headlamp_token.txt`), el `kubeconfig.yaml`, la `certificate_key.txt` de kubeadm y la contraseña del Ceph Dashboard (`ceph_dashboard_password.txt`) están excluidos del control de versiones mediante `.gitignore` en cada laboratorio.
 
 ### 4. Sistema Operativo de las Máquinas (Ubuntu 26.04)
 *   **Decisión:** Todo el clúster (Manager y Workers) se despliega obligatoriamente sobre máquinas virtuales basadas en **Ubuntu 26.04**.
 *   **Justificación:** Proporciona un entorno moderno compatible con las directivas de seguridad más recientes de `kubeadm` v1.36, `containerd`, e integra las versiones más recientes de systemd y kernel-modules idóneas para virtualización anidada sobre LXD.
+
+### 5. Verificación de Requisitos Unificada (DRY)
+*   **Decisión:** Las comprobaciones previas del entorno y la instalación de dependencias se han desacoplado de los escenarios individuales.
+*   **Justificación:** Al unificar los chequeos en el playbook raíz `check_requisitos.yml`, se elimina la duplicación de código (DRY) en cada escenario. Los recursos pesados como la descarga de la imagen base de VM `k8s-template` y la instalación de colecciones de Ansible Galaxy se ejecutan durante el bootstrap inicial del host (`00_bootstrap_host_lxd.yml`), dejando al validador como un chequeo rápido e independiente de pre-vuelo que cada clúster reutiliza.
+
+### 6. Escalado Dinámico de Nodos (Adición y Eliminación Segura)
+*   **Decisión:** Todos los laboratorios multi-nodo cuentan con playbooks de escalado específicos para crear/unir un nodo al clúster y para eliminarlo (`add_node.yml`/`adicionar_nodo.yml` y `eliminar_nodo.yml`, con el prefijo numérico correspondiente a cada escenario). En los laboratorios con un sistema de almacenamiento distribuido propio (03 Longhorn, 04 Rook Ceph, 05 Ceph Externo), la unión al clúster de Kubernetes está deliberadamente separada en un playbook aparte de integración específica en el almacenamiento (p. ej. `12_integrar_nodo_longhorn.yml`), para poder razonar cada paso por separado.
+*   **Justificación:** Esto permite simular entornos de nube elásticos de forma real. En los clústeres de almacenamiento (Longhorn, Rook Ceph y Ceph Externo), los playbooks distinguen entre añadir/eliminar capacidad de computación pura (workload) o capacidad de almacenamiento (storage), gestionando de forma segura la evacuación de cargas de trabajo (`kubectl drain`) y la migración de réplicas de datos antes de la destrucción física de las VMs.
+*   **Alcance:** El escalado dinámico cubre nodos worker/storage. Escalar el número de managers del plano de control HA no está automatizado (requeriría repetir el flujo de `07_unir_managers.yml` para un nodo nuevo) y queda fuera del alcance actual.

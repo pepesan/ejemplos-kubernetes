@@ -1,0 +1,98 @@
+---
+- name: Eliminar un nodo (workload o storage) del clúster Longhorn
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Validar que se ha especificado el nombre del nodo a eliminar
+      ansible.builtin.fail:
+        msg: "Por favor, especifica el nombre del nodo a eliminar usando: -e 'node_name=nombre-del-nodo'"
+      when: node_name is not defined
+
+    - name: Comprobar si el nodo existe en el clúster
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node {{ node_name }}
+      register: node_check
+      failed_when: false
+      changed_when: false
+
+    - name: Comprobar si el nodo es de tipo almacenamiento (storage-node) en Longhorn
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node {{ node_name }} -o jsonpath='{.metadata.labels.node\.longhorn\.io/storage-node}'
+      register: is_storage_node
+      when: node_check.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: Desactivar programación (scheduling) de réplicas de Longhorn en el nodo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} patch -n longhorn-system nodes.longhorn.io {{ node_name }}
+        --type merge -p '{"spec":{"allowScheduling":false}}'
+      when:
+        - node_check.rc == 0
+        - is_storage_node.stdout == "true"
+      failed_when: false
+      changed_when: true
+
+    - name: Esperar 15 segundos para que Longhorn asimile el cambio y detenga programaciones
+      ansible.builtin.pause:
+        seconds: 15
+      when:
+        - node_check.rc == 0
+        - is_storage_node.stdout == "true"
+
+    - name: Drenar el nodo de Kubernetes de forma segura (evacuar pods)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} drain {{ node_name }}
+        --delete-emptydir-data --ignore-daemonsets --force
+      when: node_check.rc == 0
+      failed_when: false
+
+    - name: Restablecer configuración de kubeadm en el nodo a eliminar si está accesible
+      ansible.builtin.command: >
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 root@{{ node_name }} "kubeadm reset -f"
+      register: kubeadm_reset_out
+      failed_when: false
+      changed_when: false
+      when: node_check.rc == 0
+
+    - name: Eliminar el nodo de Longhorn de forma explícita
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} delete -n longhorn-system nodes.longhorn.io {{ node_name }}
+      when:
+        - node_check.rc == 0
+        - is_storage_node.stdout == "true"
+      failed_when: false
+      changed_when: true
+
+    - name: Eliminar el nodo del clúster de Kubernetes
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} delete node {{ node_name }}
+      when: node_check.rc == 0
+      failed_when: false
+
+    - name: Comprobar si la VM de LXD existe
+      ansible.builtin.command: >
+        lxc info {{ node_name }}
+      register: lxc_check
+      failed_when: false
+      changed_when: false
+
+    - name: Detener y eliminar la máquina virtual LXD del nodo
+      community.general.lxd_container:
+        name: "{{ node_name }}"
+        state: absent
+      when: lxc_check.rc == 0
+
+    - name: Resultado de la eliminación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡NODO ELIMINADO CON ÉXITO EN ENTORNO LONGHORN!"
+          - "  "
+          - "  El nodo '{{ node_name }}' ha sido desactivado en Longhorn,"
+          - "  drenado y eliminado de Kubernetes."
+          - "  Su máquina virtual LXD ha sido destruida."
+          - "════════════════════════════════════════════════════════════════"

@@ -1,0 +1,21 @@
+---
+- import_playbook: ../02_k8s_base_ha_3_managers_3_workers/03_configurar_os.yml
+
+- name: Instalar requisitos adicionales de Longhorn (iscsid/nfs) en todos los nodos
+  hosts: k8s_nodes
+  gather_facts: false
+  tasks:
+    - name: Instalar dependencias de almacenamiento de Longhorn (open-iscsi, nfs-common)
+      ansible.builtin.apt:
+        name:
+          - open-iscsi
+          - nfs-common
+        state: present
+        update_cache: true
+        lock_timeout: 300
+
+    - name: Asegurar que el servicio iscsid está iniciado y habilitado en el arranque
+      ansible.builtin.systemd:
+        name: iscsid
+        state: started
+        enabled: true

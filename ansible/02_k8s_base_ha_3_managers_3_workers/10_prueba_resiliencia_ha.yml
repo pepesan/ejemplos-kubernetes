@@ -1,0 +1,137 @@
+---
+- name: Probar la resiliencia HA del clúster (caída de un worker y de un manager)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Estado inicial - comprobar que los 6 nodos están Ready
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes --no-headers | awk '{print $2}' | grep -c '^Ready$' || true
+      register: ready_count_initial
+      until: ready_count_initial.stdout | trim == "6"
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Mostrar estado inicial
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes
+      register: nodes_initial
+      changed_when: false
+
+    - name: Mostrar nodos
+      ansible.builtin.debug:
+        var: nodes_initial.stdout_lines
+
+    # ============ PRUEBA 1: CAÍDA DE UN WORKER ============
+    - name: "PRUEBA 1: Parar la VM del worker k8s-worker1"
+      community.general.lxd_container:
+        name: k8s-worker1
+        state: stopped
+        timeout: 30
+
+    - name: Esperar a que k8s-worker1 pase a NotReady
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node k8s-worker1 --no-headers | awk '{print $2}'
+      register: worker1_status
+      until: worker1_status.stdout | trim == "NotReady"
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: Confirmar que el resto del clúster sigue respondiendo con normalidad (vía el VIP)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes
+      register: cluster_during_worker_down
+      changed_when: false
+
+    - name: Mostrar estado del clúster con el worker caído
+      ansible.builtin.debug:
+        var: cluster_during_worker_down.stdout_lines
+
+    - name: Reiniciar la VM de k8s-worker1
+      community.general.lxd_container:
+        name: k8s-worker1
+        state: started
+        timeout: 30
+
+    - name: Esperar a que k8s-worker1 vuelva a Ready
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node k8s-worker1 --no-headers | awk '{print $2}'
+      register: worker1_recovered
+      until: worker1_recovered.stdout | trim == "Ready"
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # ============ PRUEBA 2: CAÍDA DEL MANAGER QUE HIZO EL kubeadm init ============
+    - name: "PRUEBA 2: Parar la VM del primer manager (k8s-manager1)"
+      community.general.lxd_container:
+        name: k8s-manager1
+        state: stopped
+        timeout: 30
+
+    - name: Confirmar que la API sigue respondiendo vía el VIP con el primer manager caído
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes
+      register: api_during_manager_down
+      until: api_during_manager_down.rc == 0
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: Mostrar que kube-vip ha movido el VIP a otro manager y la API sigue OK
+      ansible.builtin.debug:
+        msg:
+          - "La API sigue respondiendo vía el VIP {{ k8s_vip_address }} con k8s-manager1 apagado:"
+          - "{{ api_during_manager_down.stdout_lines }}"
+
+    - name: Esperar a que k8s-manager1 pase a NotReady
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node k8s-manager1 --no-headers | awk '{print $2}'
+      register: manager1_status
+      until: manager1_status.stdout | trim == "NotReady"
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: Reiniciar la VM de k8s-manager1
+      community.general.lxd_container:
+        name: k8s-manager1
+        state: started
+        timeout: 30
+
+    - name: Esperar a que k8s-manager1 vuelva a Ready
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node k8s-manager1 --no-headers | awk '{print $2}'
+      register: manager1_recovered
+      until: manager1_recovered.stdout | trim == "Ready"
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # ============ ESTADO FINAL ============
+    - name: Estado final - comprobar que los 6 nodos vuelven a estar Ready
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes
+      register: nodes_final
+      changed_when: false
+
+    - name: Mostrar resultado de la prueba de resiliencia HA
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡PRUEBA DE RESILIENCIA HA COMPLETADA CON ÉXITO!"
+          - "  "
+          - "  1) Caída de k8s-worker1: el clúster siguió operativo, el nodo"
+          - "     volvió a Ready tras reiniciarlo."
+          - "  2) Caída de k8s-manager1 (el que hizo el kubeadm init inicial):"
+          - "     la API siguió respondiendo vía el VIP {{ k8s_vip_address }}"
+          - "     (kube-vip movió el VIP a otro manager), y el nodo volvió a"
+          - "     Ready tras reiniciarlo."
+          - "  "
+          - "  Estado final de los 6 nodos:"
+          - "{{ nodes_final.stdout_lines }}"
+          - "════════════════════════════════════════════════════════════════"

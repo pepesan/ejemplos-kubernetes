@@ -1,0 +1,188 @@
+---
+- name: Verificar Almacenamiento Persistente RBD y CephFS con Rook
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear namespace de prueba para persistencia Ceph
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: test-ceph-persistence
+
+    # 1. PRUEBA RBD (ReadWriteOnce - RWO)
+    - name: Crear PVC para RBD (ceph-block)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: rbd-pvc-rwo
+            namespace: test-ceph-persistence
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: ceph-block
+            resources:
+              requests:
+                storage: 1Gi
+
+    - name: Esperar a que el PVC de RBD esté Bound
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get pvc rbd-pvc-rwo -n test-ceph-persistence -o jsonpath='{.status.phase}'
+      register: rbd_pvc_status
+      until: rbd_pvc_status.stdout == 'Bound'
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Crear Pod escritor para probar RBD (RWO)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: rbd-writer-pod
+            namespace: test-ceph-persistence
+          spec:
+            containers:
+              - name: writer
+                image: alpine
+                command: ["/bin/sh", "-c"]
+                args:
+                  - >
+                    echo "Hola desde RBD en el pod rbd-writer-pod" > /mnt/rbd-data/rbd-log.txt;
+                    sleep 3600
+                volumeMounts:
+                  - name: rbd-vol
+                    mountPath: /mnt/rbd-data
+            volumes:
+              - name: rbd-vol
+                persistentVolumeClaim:
+                  claimName: rbd-pvc-rwo
+
+    - name: Esperar a que el Pod escritor de RBD esté en ejecución
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get pod rbd-writer-pod -n test-ceph-persistence -o jsonpath='{.status.phase}'
+      register: pod_status
+      until: pod_status.stdout == 'Running'
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Verificar lectura del archivo en RBD
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} exec -n test-ceph-persistence rbd-writer-pod -- cat /mnt/rbd-data/rbd-log.txt
+      register: rbd_file_content
+      changed_when: false
+
+    # 2. PRUEBA CephFS (ReadWriteMany - RWX)
+    - name: Crear PVC para CephFS (ceph-filesystem)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: cephfs-pvc-rwx
+            namespace: test-ceph-persistence
+          spec:
+            accessModes:
+              - ReadWriteMany
+            storageClassName: ceph-filesystem
+            resources:
+              requests:
+                storage: 1Gi
+
+    - name: Esperar a que el PVC de CephFS esté Bound
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get pvc cephfs-pvc-rwx -n test-ceph-persistence -o jsonpath='{.status.phase}'
+      register: cephfs_pvc_status
+      until: cephfs_pvc_status.stdout == 'Bound'
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Crear Deployment de prueba (2 réplicas) compartiendo CephFS (RWX)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cephfs-rwx-writer
+            namespace: test-ceph-persistence
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: cephfs-writer
+            template:
+              metadata:
+                labels:
+                  app: cephfs-writer
+              spec:
+                containers:
+                  - name: writer
+                    image: alpine
+                    command: ["/bin/sh", "-c"]
+                    args:
+                      - >
+                        while true; do
+                          echo "$(date): Hola compartiendo datos desde ${HOSTNAME}" >> /mnt/shared-cephfs/logs.txt;
+                          sleep 5;
+                        done
+                    volumeMounts:
+                      - name: cephfs-vol
+                        mountPath: /mnt/shared-cephfs
+                volumes:
+                  - name: cephfs-vol
+                    persistentVolumeClaim:
+                      claimName: cephfs-pvc-rwx
+
+    - name: Esperar a que el deployment de CephFS esté completamente listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} rollout status deployment/cephfs-rwx-writer -n test-ceph-persistence --timeout=300s
+      changed_when: false
+
+    - name: Pausar 12 segundos para permitir que los pods escriban en CephFS
+      ansible.builtin.pause:
+        seconds: 12
+
+    - name: Obtener el nombre de uno de los pods escritores de CephFS
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get pods -n test-ceph-persistence -l app=cephfs-writer -o jsonpath='{.items[0].metadata.name}'
+      register: cephfs_pod_name
+      changed_when: false
+
+    - name: Comprobar el contenido del archivo de logs compartido en CephFS
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} exec -n test-ceph-persistence {{ cephfs_pod_name.stdout }} -- cat /mnt/shared-cephfs/logs.txt
+      register: cephfs_file_content
+      changed_when: false
+
+    - name: Mostrar resultados de verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡VERIFICACIÓN DE ALMACENAMIENTO ROOK CEPH EXITOSA!"
+          - "  "
+          - "  1) Lectura de volumen RBD (RWO):"
+          - "     Contenido: '{{ rbd_file_content.stdout }}'"
+          - "  "
+          - "  2) Lectura de volumen CephFS (RWX) compartido:"
+          - "     Líneas de log leídas:"
+          - "{{ cephfs_file_content.stdout_lines }}"
+          - "════════════════════════════════════════════════════════════════"

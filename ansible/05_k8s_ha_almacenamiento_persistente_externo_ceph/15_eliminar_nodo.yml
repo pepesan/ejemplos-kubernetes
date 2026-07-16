@@ -1,0 +1,89 @@
+---
+- name: Eliminar un nodo (K8s worker o Ceph OSD externo) del entorno
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Validar que se ha especificado el nombre del nodo a eliminar
+      ansible.builtin.fail:
+        msg: "Por favor, especifica el nombre del nodo a eliminar usando: -e 'node_name=nombre-del-nodo'"
+      when: node_name is not defined
+
+    - name: Determinar el tipo de nodo a eliminar
+      ansible.builtin.set_fact:
+        is_k8s_node: "{{ node_name.startswith('k8s-') }}"
+        is_ceph_node: "{{ node_name.startswith('ceph-') }}"
+
+    # ================= SECCIÓN KUBERNETES =================
+    - name: Drenar y eliminar nodo de Kubernetes
+      block:
+        - name: Comprobar si el nodo existe en K8s
+          ansible.builtin.command: >
+            kubectl --kubeconfig={{ kubeconfig_path }} get node {{ node_name }}
+          register: node_check
+          failed_when: false
+          changed_when: false
+
+        - name: Drenar el nodo de K8s de forma segura
+          ansible.builtin.command: >
+            kubectl --kubeconfig={{ kubeconfig_path }} drain {{ node_name }}
+            --delete-emptydir-data --ignore-daemonsets --force
+          when: node_check.rc == 0
+          failed_when: false
+
+        - name: Restablecer configuración de kubeadm en el nodo
+          ansible.builtin.command: >
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 root@{{ node_name }} "kubeadm reset -f"
+          failed_when: false
+          when: node_check.rc == 0
+
+        - name: Eliminar nodo del clúster K8s
+          ansible.builtin.command: >
+            kubectl --kubeconfig={{ kubeconfig_path }} delete node {{ node_name }}
+          when: node_check.rc == 0
+          failed_when: false
+      when: is_k8s_node
+
+    # ================= SECCIÓN CEPH EXTERNO =================
+    - name: Eliminar y purgar OSD en el clúster Ceph Externo
+      block:
+        - name: Retirar host de la orquestación de Ceph
+          ansible.builtin.command: >
+            ceph orch host rm {{ node_name }} --force
+          delegate_to: "{{ groups['ceph_monitors'][0] }}"
+          failed_when: false
+          changed_when: true
+      when: is_ceph_node and groups['ceph_monitors'] is defined and groups['ceph_monitors'] | length > 0
+
+    # ================= SECCIÓN INFRAESTRUCTURA (LXD) =================
+    - name: Comprobar si la VM de LXD existe
+      ansible.builtin.command: >
+        lxc info {{ node_name }}
+      register: lxc_check
+      failed_when: false
+      changed_when: false
+
+    - name: Detener y eliminar la máquina virtual LXD del nodo
+      community.general.lxd_container:
+        name: "{{ node_name }}"
+        state: absent
+      when: lxc_check.rc == 0
+
+    - name: Eliminar el volumen de almacenamiento OSD de Ceph en LXD (si es de almacenamiento)
+      ansible.builtin.command: >
+        lxc storage volume delete default {{ node_name }}-ceph-osd
+      when: is_ceph_node
+      failed_when: false
+      changed_when: true
+
+    - name: Resultado de la eliminación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡ELIMINACIÓN COMPLETADA EN EL ESCENARIO 05!"
+          - "  "
+          - "  El nodo '{{ node_name }}' ha sido retirado de su rol"
+          - "  (K8s / Ceph) y su infraestructura LXD destruida con éxito."
+          - "════════════════════════════════════════════════════════════════"

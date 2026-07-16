@@ -1,0 +1,45 @@
+---
+- name: Destruir el entorno del Escenario 05 (K8s & Ceph Externo)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Cargar variables de configuración
+      ansible.builtin.include_vars:
+        file: group_vars/all.yml
+
+    - name: Comprobar si existen las VMs en LXD
+      ansible.builtin.command: >
+        lxc info {{ item }}
+      loop: "{{ groups['all_nodes'] }}"
+      register: lxc_check
+      failed_when: false
+      changed_when: false
+
+    - name: Detener y eliminar las máquinas virtuales LXD del clúster
+      community.general.lxd_container:
+        name: "{{ item.item }}"
+        state: absent
+      loop: "{{ lxc_check.results }}"
+      when: item.rc == 0
+
+    - name: Eliminar volúmenes de disco OSD de Ceph en LXD
+      ansible.builtin.command: >
+        lxc storage volume delete default {{ item }}-ceph-osd
+      loop: "{{ groups['ceph_osds'] }}"
+      failed_when: false
+      changed_when: true
+
+    - name: Limpiar archivos locales temporales
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ playbook_dir }}/kubeconfig.yaml"
+        - "{{ playbook_dir }}/join_command.txt"
+        - "{{ playbook_dir }}/certificate_key.txt"
+        - "{{ playbook_dir }}/headlamp_token.txt"
+
+    - name: Mostrar finalización
+      ansible.builtin.debug:
+        msg: "El entorno del escenario 05 ha sido completamente destruido y limpiado."

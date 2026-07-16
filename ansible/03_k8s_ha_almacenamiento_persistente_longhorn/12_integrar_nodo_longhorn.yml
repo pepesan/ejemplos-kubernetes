@@ -1,0 +1,79 @@
+---
+- name: Integrar el nuevo nodo en Longhorn (etiquetas y taints de almacenamiento)
+  hosts: first_manager
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    # Por defecto TODO nodo de [new_workers] se integra como nodo de ALMACENAMIENTO.
+    # [new_workload_workers] es una lista de excepción (opt-out): solo los nodos
+    # listados ahí explícitamente se tratan como cómputo (workload) puro.
+    new_workload_nodes: "{{ groups['new_workers'] | intersect(groups['new_workload_workers'] | default([])) }}"
+    new_storage_nodes: "{{ groups['new_workers'] | difference(groups['new_workload_workers'] | default([])) }}"
+  tasks:
+    - name: Validar que existe al menos un nodo definido en new_workers
+      ansible.builtin.fail:
+        msg: >
+          No hay nodos definidos para integrar. Este playbook asume que ya se ha ejecutado
+          11_add_node.yml y que el nodo está unido al clúster de Kubernetes.
+      when: "'new_workers' not in groups or groups['new_workers'] | length == 0"
+
+    - name: Esperar a que el nuevo nodo aparezca como Ready
+      ansible.builtin.command: kubectl get nodes
+      register: nodes_list
+      until: "item in nodes_list.stdout"
+      retries: 20
+      delay: 5
+      loop: "{{ groups['new_workers'] }}"
+      changed_when: false
+
+    # Etiquetar según si es de carga de trabajo (excepción opt-out) o de almacenamiento (por defecto)
+    - name: Etiquetar nuevos nodos de cómputo (workload, excepción opt-out)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Node
+          metadata:
+            name: "{{ item }}"
+            labels:
+              node.longhorn.io/workload-node: "true"
+      loop: "{{ new_workload_nodes }}"
+      when: new_workload_nodes | length > 0
+
+    - name: Etiquetar nuevos nodos de almacenamiento (storage, por defecto)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Node
+          metadata:
+            name: "{{ item }}"
+            labels:
+              node.longhorn.io/storage-node: "true"
+              node.longhorn.io/create-default-disk: "true"
+      loop: "{{ new_storage_nodes }}"
+      when: new_storage_nodes | length > 0
+
+    - name: Aplicar taints de almacenamiento a nuevos nodos storage
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} taint node {{ item }} storage-node=true:NoSchedule
+      loop: "{{ new_storage_nodes }}"
+      when: new_storage_nodes | length > 0
+      register: taint_out
+      failed_when:
+        - taint_out.rc != 0
+        - "'already has' not in taint_out.stderr"
+      changed_when: "'tainted' in taint_out.stdout"
+
+    - name: Mostrar resumen del proceso
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡NUEVO NODO INTEGRADO CON ÉXITO EN LONGHORN!"
+          - "  "
+          - "  Nodos Workload agregados (excepción opt-out): {{ new_workload_nodes | join(', ') }}"
+          - "  Nodos Storage agregados (por defecto): {{ new_storage_nodes | join(', ') }}"
+          - "════════════════════════════════════════════════════════════════"

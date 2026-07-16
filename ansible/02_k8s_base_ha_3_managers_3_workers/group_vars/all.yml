@@ -1,0 +1,22 @@
+---
+# Conexión SSH: acceso como root sin contraseña (clave inyectada en la imagen base)
+ansible_user: root
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+# Parámetros de los nodos virtuales LXD (La plantilla 'k8s-template' debe estar basada en Ubuntu 26.04)
+lxd_image: k8s-template
+lxd_network: lxdbr0
+
+# Módulos de kernel necesarios para Kubernetes/CNI en LXD
+lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
+
+# Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
+k8s_major_version: "v1.36"
+k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
+
+# VIP de alta disponibilidad del plano de control (kube-vip)
+# No debe coincidir con ninguna IP de inventory.ini
+k8s_vip_address: "10.207.154.49"
+k8s_vip_port: 6443
+k8s_vip_interface: enp5s0
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v0.8.9"

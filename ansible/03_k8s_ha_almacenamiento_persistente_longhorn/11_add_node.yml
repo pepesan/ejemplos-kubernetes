@@ -1,0 +1,169 @@
+---
+- name: Preparar infraestructura del nuevo nodo en LXD
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Validar que existe al menos un nodo definido en new_workers
+      ansible.builtin.fail:
+        msg: >
+          No hay nodos definidos para añadir. Por favor, descomenta o añade una línea con los datos
+          del nuevo nodo en el grupo [new_workers] en tu 'inventory.ini'.
+      when: "'new_workers' not in groups or groups['new_workers'] | length == 0"
+
+    - name: Cargar variables del bootstrap general
+      ansible.builtin.include_vars:
+        file: group_vars/all.yml
+
+    - name: Crear máquina virtual LXD para el nuevo nodo
+      community.general.lxd_container:
+        name: "{{ item }}"
+        type: virtual-machine
+        state: started
+        source:
+          type: image
+          alias: "{{ lxd_image }}"
+        config:
+          limits.cpu: "{{ hostvars[item].lxd_cpu | string }}"
+          limits.memory: "{{ hostvars[item].lxd_mem }}"
+        devices:
+          eth0:
+            type: nic
+            network: "{{ lxd_network }}"
+            name: eth0
+            "ipv4.address": "{{ hostvars[item].ansible_host }}"
+          root:
+            type: disk
+            path: /
+            pool: default
+            size: "{{ hostvars[item].lxd_disk }}"
+        wait_for_ipv4_addresses: false
+        timeout: 90
+      loop: "{{ groups['new_workers'] }}"
+
+    - name: Esperar a que el agente de LXD esté listo en las máquinas virtuales
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- true
+      register: lxd_agent_status
+      until: lxd_agent_status.rc == 0
+      retries: 30
+      delay: 2
+      loop: "{{ groups['new_workers'] }}"
+      changed_when: false
+
+    - name: Configurar accesibilidad SSH en el nuevo nodo
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- {{ cmd }}
+      loop: "{{ groups['new_workers'] | product(ssh_setup_cmds) | list }}"
+      vars:
+        ssh_setup_cmds:
+          - "mkdir -p /root/.ssh"
+          - "chmod 700 /root/.ssh"
+          - "chown root:root /root/.ssh"
+      changed_when: false
+      loop_control:
+        label: "{{ item.0 }} - {{ item.1 }}"
+
+    - name: Inyectar clave pública SSH ed25519 en el nuevo nodo
+      ansible.builtin.command: >
+        lxc file push ~/.ssh/id_ed25519.pub {{ item }}/root/.ssh/authorized_keys
+      loop: "{{ groups['new_workers'] }}"
+      changed_when: false
+
+    - name: Configurar propietario y permisos de authorized_keys
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- {{ cmd }}
+      loop: "{{ groups['new_workers'] | product(auth_setup_cmds) | list }}"
+      vars:
+        auth_setup_cmds:
+          - "chown root:root /root/.ssh/authorized_keys"
+          - "chmod 600 /root/.ssh/authorized_keys"
+      changed_when: false
+      loop_control:
+        label: "{{ item.0 }} - {{ item.1 }}"
+
+    - name: Esperar a que SSH esté disponible en los nuevos nodos
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        delay: 2
+        timeout: 60
+      loop: "{{ groups['new_workers'] }}"
+
+    - name: Registrar dinámicamente los nuevos hosts en los grupos de Ansible
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups:
+          - k8s_nodes
+          - workers
+      loop: "{{ groups['new_workers'] }}"
+
+# Reutilizar playbooks existentes para configurar el nuevo nodo
+- import_playbook: 03_configurar_os.yml
+- import_playbook: 04_instalar_containerd.yml
+- import_playbook: 05_instalar_k8s_tools.yml
+
+- name: Generar y aplicar el token de unión al nuevo nodo worker
+  hosts: first_manager
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Generar nuevo comando de unión en el manager
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: new_join_cmd
+
+    - name: Guardar comando de unión en un archivo local
+      ansible.builtin.copy:
+        content: "{{ new_join_cmd.stdout }}"
+        dest: "{{ playbook_dir }}/join_command.txt"
+        mode: "0600"
+      delegate_to: localhost
+
+- name: Ejecutar la unión en el nuevo worker
+  hosts: new_workers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Comprobar si el nodo ya forma parte de Kubernetes
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Leer comando de unión desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/join_command.txt"
+      register: join_cmd_b64
+      delegate_to: localhost
+
+    - name: Unir el nuevo nodo al clúster
+      ansible.builtin.command: "{{ (join_cmd_b64.content | b64decode) | trim }}"
+      when: not kubelet_conf.stat.exists
+
+- name: Verificar la adición del nodo al clúster de Kubernetes
+  hosts: first_manager
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Esperar a que el nuevo nodo aparezca como Ready
+      ansible.builtin.command: kubectl get nodes
+      register: nodes_list
+      until: "item in nodes_list.stdout"
+      retries: 20
+      delay: 5
+      loop: "{{ groups['new_workers'] }}"
+      changed_when: false
+
+    - name: Mostrar resumen del proceso
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡NUEVO NODO AÑADIDO Y UNIDO AL CLÚSTER DE KUBERNETES!"
+          - "  "
+          - "  Nodos agregados: {{ groups['new_workers'] | join(', ') }}"
+          - "  "
+          - "  Por defecto se integrará en Longhorn como nodo de ALMACENAMIENTO."
+          - "  Ejecuta ahora para integrarlo en Longhorn:"
+          - "  ansible-playbook 12_integrar_nodo_longhorn.yml"
+          - "════════════════════════════════════════════════════════════════"

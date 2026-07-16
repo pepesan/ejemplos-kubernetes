@@ -1,0 +1,39 @@
+---
+- name: Destruir el clúster Kubernetes LXD
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Detener y eliminar las máquinas virtuales de los nodos k8s
+      community.general.lxd_container:
+        name: "{{ item }}"
+        type: virtual-machine
+        state: absent
+        force_stop: true
+        timeout: 30
+      loop: "{{ groups['k8s_nodes'] }}"
+
+    - name: Eliminar archivos locales temporales del clúster
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/{{ item }}"
+        state: absent
+      loop:
+        - kubeconfig.yaml
+        - headlamp_token.txt
+        - join_command.txt
+        - certificate_key.txt
+        - ceph_dashboard_password.txt
+
+    - name: Eliminar volúmenes de almacenamiento Ceph OSD de LXD
+      ansible.builtin.command: >
+        lxc storage volume delete default {{ item }}-ceph-disk
+      loop: "{{ groups['workers'] }}"
+      register: vol_delete_out
+      failed_when:
+        - vol_delete_out.rc != 0
+        - "'not found' not in vol_delete_out.stderr"
+      changed_when: "'deleted' in vol_delete_out.stdout"
+
+    - name: Confirmación de eliminación
+      ansible.builtin.debug:
+        msg: "Los nodos del clúster han sido eliminados con éxito de LXD y los archivos locales limpios."

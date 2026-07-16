@@ -1,0 +1,24 @@
+---
+- name: Unir Workers al Clúster Kubernetes HA
+  hosts: workers
+  gather_facts: false
+  tasks:
+    - name: Comprobar si el nodo ya forma parte del clúster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Leer comando de unión desde el archivo local
+      ansible.builtin.set_fact:
+        k8s_join_command: "{{ lookup('file', inventory_dir + '/join_command.txt') }}"
+
+    - name: Unir el nodo worker al plano de control (vía el VIP)
+      ansible.builtin.command: "{{ k8s_join_command }} --ignore-preflight-errors=SystemVerification,Swap"
+      register: join_output
+      when: not kubelet_conf.stat.exists
+      changed_when: true
+
+    - name: Mostrar resultado de la unión
+      ansible.builtin.debug:
+        var: join_output.stdout_lines
+      when: not kubelet_conf.stat.exists

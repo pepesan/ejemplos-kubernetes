@@ -1,0 +1,122 @@
+---
+- name: Instalar Cephadm y preparar requerimientos en todos los nodos Ceph
+  hosts: ceph_nodes
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Añadir el repositorio de Ceph
+      ansible.builtin.apt:
+        name: cephadm
+        state: present
+        update_cache: true
+        lock_timeout: 300
+
+    - name: Asegurar que el daemon de SSH está activo y configurado
+      ansible.builtin.systemd:
+        name: ssh
+        state: started
+        enabled: true
+
+- name: Inicializar Clúster Ceph en el nodo Monitor (ceph-mon)
+  hosts: ceph_monitors
+  become: true
+  gather_facts: false
+  vars:
+    # Contraseña generada una única vez y persistida en un archivo local fuera
+    # del control de versiones (ver .gitignore); en ejecuciones posteriores se
+    # reutiliza la misma en vez de generar una nueva.
+    ceph_dashboard_password: "{{ lookup('ansible.builtin.password', playbook_dir + '/ceph_dashboard_password.txt', length=20, chars=['ascii_letters', 'digits']) }}"
+  tasks:
+    - name: Comprobar si Ceph ya está inicializado
+      ansible.builtin.stat:
+        path: /etc/ceph/ceph.conf
+      register: ceph_conf_stat
+
+    - name: Inicializar clúster Ceph con cephadm bootstrap
+      ansible.builtin.command: >
+        cephadm bootstrap
+        --mon-ip {{ ansible_host }}
+        --initial-dashboard-user admin
+        --initial-dashboard-password {{ ceph_dashboard_password | quote }}
+        --skip-monitoring-stack
+        --allow-fqdn-hostname
+      register: bootstrap_out
+      when: not ceph_conf_stat.stat.exists
+      changed_when: true
+
+    - name: Leer clave SSH pública generada por Ceph
+      ansible.builtin.slurp:
+        src: /etc/ceph/ceph.pub
+      register: ceph_pub_key_b64
+
+    - name: Guardar clave pública de Ceph en memoria
+      ansible.builtin.set_fact:
+        ceph_ssh_key: "{{ ceph_pub_key_b64.content | b64decode }}"
+
+- name: Distribuir clave SSH de Ceph a los nodos OSD
+  hosts: ceph_osds
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Añadir clave SSH de Ceph a authorized_keys
+      ansible.builtin.authorized_key:
+        user: root
+        state: present
+        key: "{{ hostvars[groups['ceph_monitors'][0]]['ceph_ssh_key'] }}"
+
+- name: Integrar OSDs y aprovisionar almacenamiento en el Clúster Ceph
+  hosts: ceph_monitors
+  become: true
+  gather_facts: false
+  vars:
+    ceph_dashboard_password: "{{ lookup('ansible.builtin.password', playbook_dir + '/ceph_dashboard_password.txt', length=20, chars=['ascii_letters', 'digits']) }}"
+  tasks:
+    - name: Esperar a que el orquestador de Ceph esté listo
+      ansible.builtin.command: ceph orch status
+      register: orch_status
+      until: orch_status.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Añadir hosts de OSDs al orquestador Ceph
+      ansible.builtin.command: >
+        ceph orch host add {{ item }} {{ hostvars[item].ansible_host }}
+      loop: "{{ groups['ceph_osds'] }}"
+      register: host_add_out
+      failed_when:
+        - host_add_out.rc != 0
+        - "'already exists' not in host_add_out.stderr"
+      changed_when: "'Added host' in host_add_out.stdout"
+
+    - name: Activar escaneo de dispositivos y creación automática de OSDs en discos vacíos (/dev/vdb)
+      ansible.builtin.command: ceph orch apply osd --all-available-devices
+      changed_when: true
+
+    - name: Esperar a que se aprovisionen los OSDs (mínimo 3 OSDs listos)
+      ansible.builtin.command: ceph osd stat
+      register: osd_stat
+      until: "'3 osds: 3 up, 3 in' in osd_stat.stdout"
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Mostrar estado de salud del clúster Ceph Externo
+      ansible.builtin.command: ceph health
+      register: ceph_health
+      changed_when: false
+
+    - name: Mostrar datos del clúster
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡CLÚSTER CEPH EXTERNO BOOTSTRAPEADO CON ÉXITO!"
+          - "  "
+          - "  Monitor IP: {{ ansible_host }}"
+          - "  Estado de Salud: {{ ceph_health.stdout }}"
+          - "  Nodos OSD integrados: {{ groups['ceph_osds'] | join(', ') }}"
+          - "  "
+          - "  Ceph Dashboard: http://{{ ansible_host }}:8443 (o puerto por defecto)"
+          - "  Usuario: admin"
+          - "  Contraseña guardada de forma segura en: {{ playbook_dir }}/ceph_dashboard_password.txt"
+          - "════════════════════════════════════════════════════════════════"

@@ -1,0 +1,7 @@
+# Archivos temporales generados por la ejecución
+kubeconfig.yaml
+join_command.txt
+certificate_key.txt
+headlamp_token.txt
+ansible.log
+*.retry
