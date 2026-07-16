@@ -22,6 +22,7 @@ Cada laboratorio se marca como validado únicamente tras completar el ciclo desc
 | 06. Red e Ingress (MetalLB) | ⬜ Pendiente | — | |
 | 07. Observabilidad (Loki/Prom/Grafana) | ⬜ Pendiente | — | |
 | 08. Modern Ingress (Gateway API) | ⬜ Pendiente | — | |
+| 09. Actualización de Clúster HA (v1.35→v1.36) | ⬜ Pendiente | — | Idea acordada con el usuario, aún sin implementar. |
 
 Actualizar esta tabla (marcar ✅ y fecha) cada vez que un laboratorio complete su ciclo de validación de dos ejecuciones.
 
@@ -36,6 +37,7 @@ graph TD
     05 --> 06[06: Red e Ingress - MetalLB / Apps]
     06 --> 07[07: Observabilidad - Loki / Prom / Grafana]
     07 --> 08[08: Modern Ingress - Gateway API]
+    02 --> 09[09: Actualización de Clúster HA v1.35→v1.36]
 ```
 
 ---
@@ -73,3 +75,8 @@ graph TD
 ### 🟡 08. Gateway API (`08_k8s_gateway_api`)
 *   **Enfoque:** Similar al 07. Implementación de la nueva especificación moderna de enrutamiento en Kubernetes sobre el clúster HA ya existente desde el laboratorio 02 (no se construye alta disponibilidad de nuevo, se hereda).
 *   **Conceptos:** Envoy Gateway/Cilium, `GatewayClass`, `Gateway` y `HTTPRoute`. División de tráfico Canary.
+
+### 🟣 09. Actualización de Clúster HA (`09_k8s_actualizacion_cluster_ha`)
+*   **Enfoque:** Reutiliza la arquitectura HA del laboratorio 02 (3 managers + 3 workers, kube-vip), pero desplegada inicialmente en Kubernetes **v1.35**. El laboratorio ejecuta después el proceso oficial de actualización de `kubeadm` a **v1.36**, nodo a nodo, sin downtime.
+*   **Conceptos:** `kubeadm upgrade plan`/`upgrade apply` en el primer manager, `kubeadm upgrade node` en el resto de managers, `kubectl drain`/actualización de `kubelet`+`kubectl` (liberando el `apt hold` de versión)/`kubectl uncordon` por cada nodo, y verificación de que la VIP (kube-vip) y la disponibilidad del API server no se interrumpen durante todo el proceso — reutilizando el mismo patrón de prueba de disponibilidad ya usado en la prueba de resiliencia HA del laboratorio 02.
+*   **Estado:** idea acordada con el usuario (2026-07-16), pendiente de implementar.
