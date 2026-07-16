@@ -1,0 +1,51 @@
+---
+- name: Verificar el stack de observabilidad (Prometheus, Grafana, Loki)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Verificar que Prometheus responde y tiene targets activos
+      ansible.builtin.uri:
+        url: "http://{{ k8s_vip_address }}:32090/api/v1/query?query=up"
+        method: GET
+        return_content: true
+        status_code: 200
+      register: prometheus_check
+      retries: 15
+      delay: 5
+      until: >
+        prometheus_check.status == 200 and
+        (prometheus_check.json.data.result | default([]) | length) > 0
+
+    - name: Verificar que Grafana responde
+      ansible.builtin.uri:
+        url: "http://{{ k8s_vip_address }}:32091/api/health"
+        method: GET
+        status_code: 200
+      register: grafana_check
+      retries: 15
+      delay: 5
+      until: grafana_check.status == 200
+
+    - name: Consultar directamente a Loki (vía kubectl exec, sin exponer NodePort adicional)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n monitoring exec deploy/kube-prometheus-stack-grafana -c grafana --
+        wget -qO- http://loki:3100/loki/api/v1/label/job/values
+      register: loki_labels
+      retries: 15
+      delay: 5
+      until: loki_labels.rc == 0 and (loki_labels.stdout | from_json).data | default([]) | length > 0
+      changed_when: false
+
+    - name: Mostrar resultado de la verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡VERIFICACIÓN DE OBSERVABILIDAD EXITOSA!"
+          - "  "
+          - "  Prometheus: {{ prometheus_check.json.data.result | length }} series 'up' recogidas."
+          - "  Grafana:    {{ grafana_check.json.database | default('OK') }}"
+          - "  Loki:       recibiendo logs de los jobs {{ (loki_labels.stdout | from_json).data }}"
+          - "════════════════════════════════════════════════════════════════"

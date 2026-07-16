@@ -160,6 +160,25 @@ chmod +x run_all.sh destroy_all.sh
 ./destroy_all.sh   # Para limpiar y borrar todo
 ```
 
+### 7. Observabilidad Completa con Prometheus, Grafana y Loki (`07_k8s_observabilidad_loki_grafana_prometheus`)
+Ubicación: [07_k8s_observabilidad_loki_grafana_prometheus/](07_k8s_observabilidad_loki_grafana_prometheus/)
+
+Este laboratorio despliega un clúster de Kubernetes HA (basado en el 02: 3 managers + 3 workers) con **Longhorn** como backend de almacenamiento persistente y un stack completo de observabilidad: **Prometheus Operator** + **Grafana** (métricas) y **Loki** + **Promtail** (logs centralizados), todo con persistencia real en volúmenes Longhorn.
+
+Automatiza:
+*   Instalación de Longhorn como `StorageClass` por defecto.
+*   Instalación de `kube-prometheus-stack` (Prometheus Operator, Prometheus, Alertmanager, Grafana, node-exporter, kube-state-metrics) vía Helm.
+*   Instalación de Loki (modo *single binary*) y Promtail (DaemonSet), con Loki registrado automáticamente como fuente de datos en Grafana.
+*   Verificación automática de que Prometheus tiene métricas activas, Grafana responde, y Loki está recibiendo logs de los distintos componentes del clúster.
+
+Uso rápido:
+```bash
+cd 07_k8s_observabilidad_loki_grafana_prometheus
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
 ---
 
 ## 📐 Decisiones de Diseño y Arquitectura
