@@ -77,7 +77,7 @@
 
     - name: Configurar accesibilidad SSH en el nuevo nodo
       ansible.builtin.command: >
-        lxc exec {{ item }} -- {{ cmd }}
+        lxc exec {{ item.0 }} -- {{ item.1 }}
       loop: "{{ new_nodes | product(ssh_setup_cmds) | list }}"
       vars:
         ssh_setup_cmds:
@@ -96,7 +96,7 @@
 
     - name: Configurar propietario y permisos de authorized_keys
       ansible.builtin.command: >
-        lxc exec {{ item }} -- {{ cmd }}
+        lxc exec {{ item.0 }} -- {{ item.1 }}
       loop: "{{ new_nodes | product(auth_setup_cmds) | list }}"
       vars:
         auth_setup_cmds:
@@ -154,6 +154,7 @@
         dest: "{{ playbook_dir }}/join_command.txt"
         mode: "0600"
       delegate_to: localhost
+      become: false
       when: groups['new_workers'] is defined and groups['new_workers'] | length > 0
 
 - name: Ejecutar la unión en el nuevo worker de K8s
@@ -171,6 +172,7 @@
         src: "{{ playbook_dir }}/join_command.txt"
       register: join_cmd_b64
       delegate_to: localhost
+      become: false
 
     - name: Unir el nuevo nodo al clúster K8s
       ansible.builtin.command: "{{ (join_cmd_b64.content | b64decode) | trim }}"

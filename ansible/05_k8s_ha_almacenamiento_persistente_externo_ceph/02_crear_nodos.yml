@@ -62,7 +62,7 @@
 
     - name: Configurar accesibilidad SSH en todos los nodos
       ansible.builtin.command: >
-        lxc exec {{ item }} -- {{ cmd }}
+        lxc exec {{ item.0 }} -- {{ item.1 }}
       loop: "{{ groups['all_nodes'] | product(ssh_setup_cmds) | list }}"
       vars:
         ssh_setup_cmds:
@@ -81,7 +81,7 @@
 
     - name: Configurar propietario y permisos de authorized_keys
       ansible.builtin.command: >
-        lxc exec {{ item }} -- {{ cmd }}
+        lxc exec {{ item.0 }} -- {{ item.1 }}
       loop: "{{ groups['all_nodes'] | product(auth_setup_cmds) | list }}"
       vars:
         auth_setup_cmds:

@@ -25,6 +25,58 @@
       when: node_check.rc == 0
       failed_when: false
 
+    - name: Obtener los IDs de los OSD de Ceph alojados en el nodo a eliminar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph exec deploy/rook-ceph-tools --
+        ceph osd ls-tree {{ node_name }}
+      register: node_osd_ids
+      failed_when: false
+      changed_when: false
+
+    - name: Marcar como 'out' los OSD del nodo a eliminar (deja de recibir datos nuevos)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph exec deploy/rook-ceph-tools --
+        ceph osd out {{ item }}
+      loop: "{{ node_osd_ids.stdout_lines | default([]) }}"
+      when: node_osd_ids.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Purgar del CRUSH map, auth y osdmap los OSD del nodo a eliminar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph exec deploy/rook-ceph-tools --
+        ceph osd purge {{ item }} --force --yes-i-really-mean-it
+      loop: "{{ node_osd_ids.stdout_lines | default([]) }}"
+      when: node_osd_ids.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Eliminar el Deployment residual del OSD si el operador de Rook no lo limpia solo
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        api_version: apps/v1
+        kind: Deployment
+        name: "rook-ceph-osd-{{ item }}"
+        namespace: rook-ceph
+        state: absent
+      loop: "{{ node_osd_ids.stdout_lines | default([]) }}"
+      when: node_osd_ids.rc == 0
+      failed_when: false
+
+    - name: Quitar la flag 'noout' que Rook deja en el host al drenarlo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph exec deploy/rook-ceph-tools --
+        ceph osd unset-group noout {{ node_name }}
+      failed_when: false
+      changed_when: true
+
+    - name: Eliminar el bucket CRUSH vacío del host (ya sin OSDs)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph exec deploy/rook-ceph-tools --
+        ceph osd crush rm {{ node_name }}
+      failed_when: false
+      changed_when: true
+
     - name: Restablecer configuración de kubeadm en el nodo a eliminar si está accesible
       ansible.builtin.command: >
         ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 root@{{ node_name }} "kubeadm reset -f"
@@ -50,6 +102,8 @@
       community.general.lxd_container:
         name: "{{ node_name }}"
         state: absent
+        force_stop: true
+        timeout: 30
       when: lxc_check.rc == 0
 
     - name: Eliminar el volumen de almacenamiento OSD de Ceph en LXD

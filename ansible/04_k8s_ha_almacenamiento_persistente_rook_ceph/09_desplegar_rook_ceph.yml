@@ -240,7 +240,7 @@
     - name: Esperar al ClientProfile de ceph-csi específico del subvolume group CephFS
       ansible.builtin.command: >
         kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph get clientprofile
-        -o jsonpath={.items[?(@.spec.cephFs.subVolumeGroup=="csi")].metadata.name}
+        -o jsonpath='{.items[?(@.spec.cephFs.subVolumeGroup=="csi")].metadata.name}'
       register: cephfs_client_profile
       until: cephfs_client_profile.stdout | trim | length > 0
       retries: 30

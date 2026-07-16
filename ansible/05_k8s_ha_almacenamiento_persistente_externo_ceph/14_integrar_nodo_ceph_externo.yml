@@ -11,6 +11,7 @@
           ejecutado 13_add_node.yml y que la VM del nuevo nodo ya existe.
       when: "'new_ceph_osds' not in groups or groups['new_ceph_osds'] | length == 0"
       delegate_to: localhost
+      become: false
       run_once: true
 
     - name: Instalar python3 y LVM2 en el nuevo nodo Ceph

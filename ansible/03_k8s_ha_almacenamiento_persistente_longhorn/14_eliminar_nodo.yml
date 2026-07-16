@@ -84,6 +84,8 @@
       community.general.lxd_container:
         name: "{{ node_name }}"
         state: absent
+        force_stop: true
+        timeout: 30
       when: lxc_check.rc == 0
 
     - name: Resultado de la eliminación
