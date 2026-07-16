@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-HASTA="10"
+HASTA="11"
 if [ "${1:-}" = "--hasta" ]; then
   HASTA="$2"
 fi
@@ -40,6 +40,7 @@ run_playbook 07 07_unir_managers.yml              "Unir los managers adicionales
 run_playbook 08 08_unir_workers.yml               "Unir los nodos workers al clúster (vía el VIP)"
 run_playbook 09 09_desplegar_longhorn.yml         "Desplegar Longhorn Engine y Dashboard en Kubernetes"
 run_playbook 10 10_verificar_persistencia_rwx.yml "Desplegar PVC y Pods de prueba para verificar persistencia RWX"
+run_playbook 11 11_desplegar_headlamp.yml         "Desplegar Headlamp Dashboard y configurar token"
 
 host_ip() { awk -v h="$1" '$1==h { for (i=1;i<=NF;i++) if ($i ~ /^ansible_host=/) print substr($i, index($i, "=")+1) }' inventory.ini; }
 VIP=$(awk -F': ' '/^k8s_vip_address:/ { gsub(/"/,"",$2); print $2 }' group_vars/all.yml)
@@ -60,6 +61,11 @@ VIP=$(awk -F': ' '/^k8s_vip_address:/ { gsub(/"/,"",$2); print $2 }' group_vars/
   echo "  "
   echo "  Panel de Administración de Longhorn: http://${VIP}:32085"
   echo "  "
+  if [ -f "headlamp_token.txt" ]; then
+    echo "  Headlamp Dashboard: http://${VIP}:32082"
+    echo "  Token de acceso guardado en: $(pwd)/headlamp_token.txt"
+    echo "  "
+  fi
   echo "  Para usar kubectl desde tu host local:"
   echo "  export KUBECONFIG=\$(pwd)/kubeconfig.yaml"
   echo "  kubectl get nodes"

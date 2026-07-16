@@ -165,5 +165,5 @@
           - "  "
           - "  Por defecto se integrará en Longhorn como nodo de ALMACENAMIENTO."
           - "  Ejecuta ahora para integrarlo en Longhorn:"
-          - "  ansible-playbook 12_integrar_nodo_longhorn.yml"
+          - "  ansible-playbook 13_integrar_nodo_longhorn.yml"
           - "════════════════════════════════════════════════════════════════"

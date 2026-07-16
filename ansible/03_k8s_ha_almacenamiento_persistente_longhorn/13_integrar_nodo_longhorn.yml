@@ -15,7 +15,7 @@
       ansible.builtin.fail:
         msg: >
           No hay nodos definidos para integrar. Este playbook asume que ya se ha ejecutado
-          11_add_node.yml y que el nodo está unido al clúster de Kubernetes.
+          12_add_node.yml y que el nodo está unido al clúster de Kubernetes.
       when: "'new_workers' not in groups or groups['new_workers'] | length == 0"
 
     - name: Esperar a que el nuevo nodo aparezca como Ready

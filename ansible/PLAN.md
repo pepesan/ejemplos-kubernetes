@@ -16,7 +16,7 @@ Cada laboratorio se marca como validado únicamente tras completar el ciclo desc
 | --- | --- | --- | --- |
 | 01. Mono-Nodo Base | ✅ Validado | 2026-07-16 | 2 ejecuciones consecutivas OK (exit 0, changed=0 en todas las tareas). Nodo y pods sanos confirmados manualmente por el usuario (kubectl get nodes/pods, Nginx/Apache/Headlamp respondiendo 200). |
 | 02. Multi-Nodo Base HA | ✅ Validado | 2026-07-16 | 2 ejecuciones consecutivas OK (exit 0, changed=0 salvo cambios esperados). Nodos y pods sanos confirmados manualmente por el usuario (kubectl get nodes/pods, eventos de CoreDNS revisados). Pendiente issue menor no bloqueante: `helm_repository force_update: true` en `11_desplegar_headlamp.yml` reporta `changed` en cada ejecución. |
-| 03. Persistencia Longhorn | ⬜ Pendiente | — | |
+| 03. Persistencia Longhorn | ✅ Validado | 2026-07-16 | 2 ejecuciones desde cero (exit 0, changed=0 salvo cambios esperados) + 1 pasada adicional tras añadir el paso de Headlamp (antes ausente en este lab). 71 pods sanos, Longhorn y Headlamp verificados manualmente por el usuario. Se añadió `11_desplegar_headlamp.yml` (renumerando `add_node`→12, `integrar_nodo_longhorn`→13, `eliminar_nodo`→14) y se rediseñó el escalado de nodos con almacenamiento por defecto (opt-out en `[new_workload_workers]`). |
 | 04. Rook Ceph Hiperconvergente | ⬜ Pendiente | — | |
 | 05. Ceph Externo + K8s CSI | ⬜ Pendiente | — | |
 | 06. Red e Ingress (MetalLB) | ⬜ Pendiente | — | |
