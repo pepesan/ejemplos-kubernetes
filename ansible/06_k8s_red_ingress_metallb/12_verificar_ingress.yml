@@ -1,0 +1,60 @@
+---
+- name: Verificar el enrutamiento HTTP por nombre de host a través del Ingress
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Obtener la IP LoadBalancer del Ingress Controller
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n ingress-nginx get svc ingress-nginx-controller
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: ingress_lb_ip
+      changed_when: false
+
+    - name: Verificar respuesta HTTP de App A (por Host header)
+      ansible.builtin.uri:
+        url: "http://{{ ingress_lb_ip.stdout }}/"
+        method: GET
+        headers:
+          Host: "app-a.{{ ingress_base_domain }}"
+        return_content: true
+        status_code: 200
+      register: app_a_check
+      retries: 15
+      delay: 5
+      until: app_a_check.status == 200
+
+    - name: Verificar respuesta HTTP de App B (por Host header)
+      ansible.builtin.uri:
+        url: "http://{{ ingress_lb_ip.stdout }}/"
+        method: GET
+        headers:
+          Host: "app-b.{{ ingress_base_domain }}"
+        return_content: true
+        status_code: 200
+      register: app_b_check
+      retries: 15
+      delay: 5
+      until: app_b_check.status == 200
+
+    - name: Comprobar que cada host devuelve el contenido correcto (y no el del otro)
+      ansible.builtin.assert:
+        that:
+          - "'App A' in app_a_check.content"
+          - "'App B' in app_b_check.content"
+          - "'App B' not in app_a_check.content"
+          - "'App A' not in app_b_check.content"
+        fail_msg: "El enrutamiento por nombre de host no está devolviendo el contenido esperado."
+        success_msg: "El Ingress enruta correctamente cada host a su microservicio."
+
+    - name: Mostrar resultado de la verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡VERIFICACIÓN DE INGRESS EXITOSA!"
+          - "  "
+          - "  app-a.{{ ingress_base_domain }} -> {{ app_a_check.content }}"
+          - "  app-b.{{ ingress_base_domain }} -> {{ app_b_check.content }}"
+          - "════════════════════════════════════════════════════════════════"

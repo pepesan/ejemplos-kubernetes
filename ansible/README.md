@@ -141,6 +141,25 @@ Ubicación: [05_k8s_ha_almacenamiento_persistente_externo_ceph/](05_k8s_ha_almac
 
 Este laboratorio despliega un clúster de Kubernetes HA (basado en el 02: 3 managers + 3 workers) y un clúster Ceph externo formado por 3 nodos de almacenamiento (OSDs) independientes sobre VMs LXD, gestionados de forma externa e integrados a través de drivers de Ceph CSI en Kubernetes.
 
+### 6. Red y Acceso Externo con MetalLB e Ingress (`06_k8s_red_ingress_metallb`)
+Ubicación: [06_k8s_red_ingress_metallb/](06_k8s_red_ingress_metallb/)
+
+Este laboratorio despliega un clúster de Kubernetes HA (basado en el 02: 3 managers + 3 workers) y añade **MetalLB** (LoadBalancer L2 local sobre la red de LXD) y el **NGINX Ingress Controller**, exponiendo dos microservicios de prueba consolidados detrás de un único Ingress que enruta por nombre de host.
+
+Automatiza:
+*   Instalación de MetalLB vía Helm y configuración de un `IPAddressPool`/`L2Advertisement`.
+*   Instalación del NGINX Ingress Controller vía Helm, expuesto como `Service` tipo `LoadBalancer`.
+*   Despliegue de dos microservicios de prueba (`app-a`, `app-b`), cada uno con su propio `ConfigMap`, `Secret` e `initContainer` de espera de dependencias (DNS).
+*   Verificación automática de que el enrutamiento por nombre de host (`app-a.k8s.local`, `app-b.k8s.local`) devuelve el contenido correcto de cada microservicio.
+
+Uso rápido:
+```bash
+cd 06_k8s_red_ingress_metallb
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
 ---
 
 ## 📐 Decisiones de Diseño y Arquitectura

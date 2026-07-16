@@ -1,0 +1,53 @@
+---
+- name: Desplegar el NGINX Ingress Controller
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Agregar el repositorio de ingress-nginx a Helm
+      kubernetes.core.helm_repository:
+        name: ingress-nginx
+        repo_url: https://kubernetes.github.io/ingress-nginx
+
+    - name: Instalar el NGINX Ingress Controller usando Helm
+      kubernetes.core.helm:
+        name: ingress-nginx
+        chart_ref: ingress-nginx/ingress-nginx
+        release_namespace: ingress-nginx
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig_path }}"
+        values:
+          controller:
+            service:
+              type: LoadBalancer
+            ingressClassResource:
+              default: true
+
+    - name: Esperar a que el controller de ingress-nginx esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=180s
+      changed_when: false
+
+    - name: Esperar a que MetalLB asigne una IP externa al Service del Ingress
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n ingress-nginx get svc ingress-nginx-controller
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: ingress_lb_ip
+      until: ingress_lb_ip.stdout | trim | length > 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Mostrar resumen del Ingress Controller
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡NGINX INGRESS CONTROLLER DESPLEGADO CON ÉXITO!"
+          - "  "
+          - "  IP LoadBalancer asignada por MetalLB: {{ ingress_lb_ip.stdout }}"
+          - "  "
+          - "  Añade esto a tu /etc/hosts para probarlo por nombre de host:"
+          - "  {{ ingress_lb_ip.stdout }} app-a.{{ ingress_base_domain }} app-b.{{ ingress_base_domain }}"
+          - "════════════════════════════════════════════════════════════════"
