@@ -1,0 +1,153 @@
+---
+- name: Desplegar aplicación demo con reparto de tráfico Canary
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear Deployment y Service de la versión "stable"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: demo-stable
+            namespace: default
+            labels:
+              app: demo
+              version: stable
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: demo
+                version: stable
+            template:
+              metadata:
+                labels:
+                  app: demo
+                  version: stable
+              spec:
+                containers:
+                  - name: demo
+                    image: nginx:alpine
+                    command:
+                      - sh
+                      - -c
+                      - 'echo "version=stable" > /usr/share/nginx/html/index.html && nginx -g "daemon off;"'
+                    ports:
+                      - containerPort: 80
+
+    - name: Crear Deployment y Service de la versión "canary"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: demo-canary
+            namespace: default
+            labels:
+              app: demo
+              version: canary
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: demo
+                version: canary
+            template:
+              metadata:
+                labels:
+                  app: demo
+                  version: canary
+              spec:
+                containers:
+                  - name: demo
+                    image: nginx:alpine
+                    command:
+                      - sh
+                      - -c
+                      - 'echo "version=canary" > /usr/share/nginx/html/index.html && nginx -g "daemon off;"'
+                    ports:
+                      - containerPort: 80
+
+    - name: Crear Service para la versión "stable"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: demo-stable
+            namespace: default
+          spec:
+            selector:
+              app: demo
+              version: stable
+            ports:
+              - port: 80
+                targetPort: 80
+
+    - name: Crear Service para la versión "canary"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: demo-canary
+            namespace: default
+          spec:
+            selector:
+              app: demo
+              version: canary
+            ports:
+              - port: 80
+                targetPort: 80
+
+    - name: Esperar a que los Deployments estén disponibles
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        kind: Deployment
+        namespace: default
+        name: "{{ item }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 180
+      loop:
+        - demo-stable
+        - demo-canary
+
+    - name: Crear HTTPRoute con reparto de tráfico Canary (80% stable / 20% canary)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: demo-canary
+            namespace: default
+          spec:
+            parentRefs:
+              - name: demo-gateway-http
+                sectionName: http
+            hostnames:
+              - "{{ gateway_base_domain }}"
+            rules:
+              - backendRefs:
+                  - name: demo-stable
+                    port: 80
+                    weight: 80
+                  - name: demo-canary
+                    port: 80
+                    weight: 20

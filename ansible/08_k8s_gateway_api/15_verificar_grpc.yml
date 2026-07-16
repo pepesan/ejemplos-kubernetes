@@ -1,0 +1,54 @@
+---
+- name: Verificar el acceso al servicio gRPC (GRPCRoute) vía el Gateway
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    grpcurl_version: "1.9.3"
+  tasks:
+    - name: Obtener la IP LoadBalancer del Gateway gRPC
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n default get svc
+        cilium-gateway-demo-gateway-grpc
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: gateway_lb_ip
+      changed_when: false
+
+    - name: Descargar el binario de grpcurl para verificar el GRPCRoute
+      ansible.builtin.get_url:
+        url: "https://github.com/fullstorydev/grpcurl/releases/download/v{{ grpcurl_version }}/grpcurl_{{ grpcurl_version }}_linux_x86_64.tar.gz"
+        dest: "/tmp/grpcurl_{{ grpcurl_version }}.tar.gz"
+        mode: "0644"
+
+    - name: Extraer el binario de grpcurl
+      ansible.builtin.unarchive:
+        src: "/tmp/grpcurl_{{ grpcurl_version }}.tar.gz"
+        dest: "/tmp"
+        remote_src: true
+        creates: "/tmp/grpcurl"
+
+    - name: Invocar el servicio gRPC "grpcbin" a través del Gateway (GRPCRoute)
+      ansible.builtin.command: >
+        /tmp/grpcurl -plaintext -authority grpc.{{ gateway_base_domain }}
+        -d '{"greeting":"mundo"}'
+        {{ gateway_lb_ip.stdout }}:8080 hello.HelloService/SayHello
+      register: grpc_check
+      changed_when: false
+
+    - name: Limpiar los archivos temporales de grpcurl
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/grpcurl_{{ grpcurl_version }}.tar.gz"
+        - "/tmp/grpcurl"
+
+    - name: Mostrar resumen de la verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  VERIFICACIÓN DE gRPC A TRAVÉS DEL GATEWAY"
+          - "  "
+          - "  gRPC (Gateway API GRPCRoute, puerto 8080): {{ grpc_check.stdout }}"
+          - "════════════════════════════════════════════════════════════════"

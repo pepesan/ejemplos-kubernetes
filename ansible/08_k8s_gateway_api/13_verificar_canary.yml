@@ -1,0 +1,54 @@
+---
+- name: Verificar el reparto de tráfico Canary a través del Gateway
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    num_peticiones: 100
+  tasks:
+    - name: Obtener la IP LoadBalancer del Gateway HTTP
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n default get svc
+        cilium-gateway-demo-gateway-http
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: gateway_lb_ip
+      changed_when: false
+
+    - name: Lanzar {{ num_peticiones }} peticiones HTTP contra el Gateway
+      ansible.builtin.uri:
+        url: "http://{{ gateway_lb_ip.stdout }}/"
+        headers:
+          Host: "{{ gateway_base_domain }}"
+        return_content: true
+        status_code: 200
+      register: canary_requests
+      loop: "{{ range(0, num_peticiones | int) | list }}"
+      loop_control:
+        label: "petición {{ item }}"
+
+    - name: Contar respuestas servidas por cada versión
+      ansible.builtin.set_fact:
+        respuestas_stable: "{{ canary_requests.results | selectattr('content', 'search', 'version=stable') | list | length }}"
+        respuestas_canary: "{{ canary_requests.results | selectattr('content', 'search', 'version=canary') | list | length }}"
+
+    - name: Mostrar resumen del reparto de tráfico observado
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  VERIFICACIÓN DE REPARTO CANARY ({{ num_peticiones }} peticiones)"
+          - "  "
+          - "  Peticiones servidas por 'stable' (peso 80): {{ respuestas_stable }}"
+          - "  Peticiones servidas por 'canary' (peso 20): {{ respuestas_canary }}"
+          - "  "
+          - "  Se espera una proporción aproximada 80/20, con variación estadística"
+          - "  normal al tratarse de una muestra de {{ num_peticiones }} peticiones."
+          - "════════════════════════════════════════════════════════════════"
+
+    - name: Fallar si alguna de las dos versiones no ha recibido ninguna petición
+      ansible.builtin.assert:
+        that:
+          - respuestas_stable | int > 0
+          - respuestas_canary | int > 0
+        fail_msg: "El reparto de tráfico Canary no está funcionando: una de las dos versiones no ha recibido ninguna petición."
+        success_msg: "Ambas versiones ('stable' y 'canary') han recibido tráfico correctamente."

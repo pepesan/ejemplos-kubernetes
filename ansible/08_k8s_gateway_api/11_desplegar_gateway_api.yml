@@ -1,0 +1,101 @@
+---
+- name: Desplegar los Gateway de Cilium (GatewayClass + Gateway HTTP + Gateway gRPC)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Comprobar que la GatewayClass "cilium" existe (creada automáticamente por el operador de Cilium)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: GatewayClass
+          metadata:
+            name: cilium
+          spec:
+            controllerName: io.cilium/gateway-controller
+
+    # Se usan dos Gateway separados (uno por protocolo) en vez de listeners
+    # mezclados en un único Gateway: Cilium tiene un bug conocido por el que,
+    # con varios listeners con distintos "allowedRoutes.kinds" en el mismo
+    # Gateway, a veces valida una ruta contra el listener equivocado y la
+    # rechaza aunque el sectionName sea correcto (NotAllowedByListeners).
+    - name: Crear el Gateway HTTP (para el HTTPRoute Canary)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: demo-gateway-http
+            namespace: default
+          spec:
+            gatewayClassName: cilium
+            listeners:
+              - name: http
+                protocol: HTTP
+                port: 80
+                allowedRoutes:
+                  namespaces:
+                    from: All
+                  kinds:
+                    - kind: HTTPRoute
+
+    - name: Crear el Gateway gRPC (h2c, para el GRPCRoute)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: demo-gateway-grpc
+            namespace: default
+          spec:
+            gatewayClassName: cilium
+            listeners:
+              - name: grpc
+                protocol: HTTP
+                port: 8080
+                hostname: "grpc.{{ gateway_base_domain }}"
+                allowedRoutes:
+                  namespaces:
+                    from: All
+                  kinds:
+                    - kind: GRPCRoute
+
+    - name: Esperar a que el Service LoadBalancer del Gateway HTTP reciba una IP del LB-IPAM de Cilium
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n default get svc
+        cilium-gateway-demo-gateway-http
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: gateway_http_lb_ip
+      until: gateway_http_lb_ip.stdout | trim | length > 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Esperar a que el Service LoadBalancer del Gateway gRPC reciba una IP del LB-IPAM de Cilium
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n default get svc
+        cilium-gateway-demo-gateway-grpc
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: gateway_grpc_lb_ip
+      until: gateway_grpc_lb_ip.stdout | trim | length > 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Mostrar resumen de Gateway API
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡GATEWAY API (CILIUM) DESPLEGADO CON ÉXITO!"
+          - "  "
+          - "  IP del Gateway HTTP (Canary): {{ gateway_http_lb_ip.stdout }}"
+          - "  IP del Gateway gRPC:          {{ gateway_grpc_lb_ip.stdout }}"
+          - "════════════════════════════════════════════════════════════════"

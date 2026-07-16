@@ -1,0 +1,44 @@
+---
+# Conexión SSH: acceso como root sin contraseña (clave inyectada en la imagen base)
+ansible_user: root
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+# Parámetros de los nodos virtuales LXD (La plantilla 'k8s-template' debe estar basada en Ubuntu 26.04)
+lxd_image: k8s-template
+lxd_network: lxdbr0
+
+# Módulos de kernel necesarios para Kubernetes/CNI en LXD
+lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
+
+# Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
+k8s_major_version: "v1.36"
+k8s_pod_network_cidr: "10.244.0.0/16" # CIDR de pods, gestionado por Cilium (modo cluster-pool)
+
+# VIP de alta disponibilidad del plano de control (kube-vip)
+# No debe coincidir con ninguna IP de inventory.ini
+k8s_vip_address: "10.207.154.49"
+k8s_vip_port: 6443
+k8s_vip_interface: enp5s0
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+
+# Rango de IPs reservado para el LoadBalancer L2 nativo de Cilium (LB-IPAM +
+# L2Announcement, sustituye a MetalLB). Debe estar dentro de la subred de
+# lxdbr0 (10.207.154.0/24) y no solaparse con la VIP ni con ninguna IP de
+# nodo de inventory.ini.
+cilium_lb_ip_range: "10.207.154.70-10.207.154.80"
+
+# Versión de las CRDs de Gateway API (canal 'experimental', necesario para
+# TCPRoute/TLSRoute). Cilium requiere que estas CRDs existan ANTES de
+# instalarse con gatewayAPI.enabled=true (a diferencia de Envoy Gateway, no
+# las incluye en su propio chart). Debe coincidir con la versión que la
+# documentación de la versión de Cilium usada declara como probada/soportada
+# (ver cilium_version) — un desajuste entre ambas provoca errores de
+# validación silenciosos en el estado de GatewayClass/HTTPRoute/etc.
+gateway_api_version: "v1.4.1"
+
+# Versión de Cilium, usado como CNI del clúster y como implementación de
+# Gateway API (sustituye a Flannel + Envoy Gateway en este laboratorio).
+cilium_version: "1.19.5"
+
+# Dominio local (ficticio) usado para probar el reparto de tráfico Canary.
+gateway_base_domain: "gw.local"

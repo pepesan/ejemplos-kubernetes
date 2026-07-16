@@ -19,7 +19,7 @@ k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
 k8s_vip_address: "10.207.154.49"
 k8s_vip_port: 6443
 k8s_vip_interface: enp5s0
-kube_vip_image: "ghcr.io/kube-vip/kube-vip:v0.8.9"
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
 
 # Rango de IPs reservado para MetalLB (LoadBalancer L2 local).
 # Debe estar dentro de la subred de lxdbr0 (10.207.154.0/24) y no solaparse
