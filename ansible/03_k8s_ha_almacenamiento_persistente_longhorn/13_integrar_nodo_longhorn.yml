@@ -1,7 +1,7 @@
 ---
 - name: Integrar el nuevo nodo en Longhorn (etiquetas y taints de almacenamiento)
-  hosts: first_manager
-  become: true
+  hosts: localhost
+  connection: local
   gather_facts: false
   vars:
     kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
@@ -19,7 +19,7 @@
       when: "'new_workers' not in groups or groups['new_workers'] | length == 0"
 
     - name: Esperar a que el nuevo nodo aparezca como Ready
-      ansible.builtin.command: kubectl get nodes
+      ansible.builtin.command: kubectl --kubeconfig={{ kubeconfig_path }} get nodes
       register: nodes_list
       until: "item in nodes_list.stdout"
       retries: 20
