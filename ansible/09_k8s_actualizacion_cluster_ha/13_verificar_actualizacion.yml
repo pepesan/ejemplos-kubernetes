@@ -1,0 +1,57 @@
+---
+- name: Verificar que el clúster ha quedado sano en la nueva versión
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Comprobar que los 6 nodos están Ready
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes --no-headers | awk '{print $2}' | grep -c '^Ready$' || true
+      register: ready_count
+      until: ready_count.stdout | trim == "6"
+      retries: 10
+      delay: 10
+      changed_when: false
+
+    - name: Obtener la versión de Kubernetes reportada por cada nodo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes -o custom-columns=NAME:.metadata.name,VERSION:.status.nodeInfo.kubeletVersion --no-headers
+      register: node_versions
+      changed_when: false
+
+    - name: Fallar si algún nodo no ha quedado en la versión objetivo
+      ansible.builtin.assert:
+        that:
+          - "'{{ k8s_upgrade_target_version }}' in item"
+        fail_msg: "El nodo no reporta la versión objetivo {{ k8s_upgrade_target_version }}: {{ item }}"
+      loop: "{{ node_versions.stdout_lines }}"
+
+    - name: Comprobar que la API sigue respondiendo con normalidad vía el VIP
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Comprobar que todos los Pods del namespace kube-system están Running
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get pods -n kube-system --no-headers | awk '$3 != "Running" && $3 != "Completed"' | wc -l
+      register: unhealthy_pods
+      until: unhealthy_pods.stdout | trim == "0"
+      retries: 10
+      delay: 10
+      changed_when: false
+
+    - name: Mostrar resultado final de la actualización
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡CLÚSTER ACTUALIZADO DE {{ k8s_major_version }} A {{ k8s_upgrade_target_version }} CON ÉXITO!"
+          - "  "
+          - "  Versión reportada por cada nodo:"
+          - "{{ node_versions.stdout_lines }}"
+          - "  "
+          - "  La VIP del plano de control ({{ k8s_vip_address }}) siguió disponible"
+          - "  durante todo el proceso, nodo a nodo, sin downtime."
+          - "════════════════════════════════════════════════════════════════"

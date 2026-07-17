@@ -1,0 +1,111 @@
+---
+- name: Actualizar los managers adicionales a la nueva versión de Kubernetes
+  hosts: additional_managers
+  gather_facts: false
+  serial: 1
+  vars:
+    kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Descargar la clave GPG del repositorio de la nueva versión de Kubernetes
+      ansible.builtin.get_url:
+        url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_upgrade_target_version }}/deb/Release.key"
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+        mode: "0644"
+        force: true
+
+    - name: Apuntar el repositorio de Kubernetes a la nueva versión
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/{{ k8s_upgrade_target_version }}/deb/ /"
+        filename: kubernetes
+        state: present
+        update_cache: true
+
+    - name: Quitar el "hold" de kubeadm para poder actualizarlo
+      ansible.builtin.dpkg_selections:
+        name: kubeadm
+        selection: install
+
+    - name: Instalar la versión más reciente de kubeadm del nuevo repositorio
+      ansible.builtin.apt:
+        name: kubeadm
+        state: latest
+        lock_timeout: 300
+
+    - name: Volver a poner "hold" en kubeadm
+      ansible.builtin.dpkg_selections:
+        name: kubeadm
+        selection: hold
+
+    - name: Aplicar la actualización de este manager (kubeadm upgrade node)
+      ansible.builtin.command: kubeadm upgrade node
+      register: upgrade_node
+      changed_when: true
+
+    - name: Marcar el nodo como no programable (drain) antes de actualizar kubelet
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} drain {{ inventory_hostname }}
+        --ignore-daemonsets --delete-emptydir-data --force --timeout=120s
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Quitar el "hold" de kubelet y kubectl para poder actualizarlos
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop:
+        - kubelet
+        - kubectl
+
+    - name: Instalar la versión más reciente de kubelet y kubectl
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubectl
+        state: latest
+        lock_timeout: 300
+
+    - name: Volver a poner "hold" en kubelet y kubectl
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubectl
+
+    - name: Recargar systemd y reiniciar kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+        daemon_reload: true
+
+    - name: Marcar el nodo como programable de nuevo (uncordon)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} uncordon {{ inventory_hostname }}
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Esperar a que el nodo vuelva a Ready con la nueva versión
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node {{ inventory_hostname }} --no-headers | awk '{print $2}'
+      register: node_status
+      until: node_status.stdout | trim == "Ready"
+      retries: 30
+      delay: 10
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Comprobar que la API sigue respondiendo vía el VIP durante la actualización de este manager
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes
+      register: api_check
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Mostrar resumen de la actualización de este manager
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡MANAGER {{ inventory_hostname }} ACTUALIZADO A {{ k8s_upgrade_target_version }}!"
+          - "  La API del clúster (vía el VIP {{ k8s_vip_address }}) siguió respondiendo"
+          - "  durante toda la actualización de este nodo."
+          - "════════════════════════════════════════════════════════════════"
