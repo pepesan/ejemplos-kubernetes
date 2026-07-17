@@ -27,7 +27,7 @@
             galera:
               enabled: true
             storage:
-              size: 3Gi
+              size: "{{ mariadb_storage_size }}"
               storageClassName: longhorn
             resources:
               requests:

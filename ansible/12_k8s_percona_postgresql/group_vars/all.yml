@@ -47,6 +47,11 @@ percona_pgbackrest_image_tag: "2.58.0-2"
 pg_cluster_size: 3
 pg_bouncer_size: 3
 
+# Tamaño del volumen persistente de datos de cada réplica PostgreSQL, y del
+# repositorio local de backups de pgBackRest
+pg_storage_size: "3Gi"
+pg_backup_storage_size: "1Gi"
+
 # Versión del chart de Headlamp
 headlamp_chart_version: "0.43.0"
 

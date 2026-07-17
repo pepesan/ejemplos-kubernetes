@@ -65,7 +65,7 @@
                     accessModes: ["ReadWriteOnce"]
                     resources:
                       requests:
-                        storage: 1Gi
+                        storage: "{{ alertmanager_storage_size }}"
 
     - name: Esperar a que Grafana esté lista
       ansible.builtin.command: >

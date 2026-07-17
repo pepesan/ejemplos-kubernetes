@@ -22,3 +22,6 @@ kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
 
 # Versión del chart de Headlamp
 headlamp_chart_version: "0.43.0"
+
+# Tamaño de los PVC de prueba usados para verificar la persistencia (RBD y CephFS)
+rook_ceph_test_pvc_size: "1Gi"

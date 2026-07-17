@@ -41,6 +41,9 @@ mariadb_image_tag_upgrade: "11.8.8"
 # Tamaño del clúster Galera de MariaDB
 mariadb_cluster_size: 3
 
+# Tamaño del volumen persistente de datos de cada réplica MariaDB
+mariadb_storage_size: "3Gi"
+
 # Versión del chart de Headlamp
 headlamp_chart_version: "0.43.0"
 

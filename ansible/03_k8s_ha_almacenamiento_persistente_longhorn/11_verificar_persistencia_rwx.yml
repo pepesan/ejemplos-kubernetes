@@ -32,7 +32,7 @@
               storageClassName: longhorn
               resources:
                 requests:
-                  storage: 1Gi
+                  storage: "{{ longhorn_test_pvc_size }}"
 
     - name: Esperar a que el PVC RWX esté aprovisionado por Longhorn
       ansible.builtin.command: >

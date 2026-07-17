@@ -25,3 +25,6 @@ headlamp_chart_version: "0.43.0"
 
 # Versión del chart de ceph-csi-operator/ceph-csi-drivers
 ceph_csi_chart_version: "1.0.4"
+
+# Tamaño del PVC de prueba usado para verificar la persistencia
+ceph_externo_test_pvc_size: "1Gi"

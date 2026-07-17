@@ -28,7 +28,7 @@
             persistence:
               enabled: true
               storageClass: longhorn
-              size: 3Gi
+              size: "{{ pxc_storage_size }}"
           haproxy:
             enabled: true
             size: "{{ pxc_haproxy_size }}"

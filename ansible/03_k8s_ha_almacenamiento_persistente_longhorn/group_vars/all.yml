@@ -25,3 +25,6 @@ headlamp_chart_version: "0.43.0"
 
 # Versión del chart de Longhorn
 longhorn_chart_version: "1.12.0"
+
+# Tamaño del PVC de prueba usado para verificar la persistencia RWX
+longhorn_test_pvc_size: "1Gi"

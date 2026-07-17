@@ -39,7 +39,7 @@
                 storageClassName: longhorn
                 resources:
                   requests:
-                    storage: 3Gi
+                    storage: "{{ pg_storage_size }}"
               # Por defecto el chart solo pone anti-affinity PREFERENTE
               # (preferredDuringSchedulingIgnoredDuringExecution), no
               # obligatoria — en un clúster de 3 workers eso puede acabar
@@ -71,7 +71,7 @@
                       storageClassName: longhorn
                       resources:
                         requests:
-                          storage: 1Gi
+                          storage: "{{ pg_backup_storage_size }}"
           expose:
             type: LoadBalancer
 

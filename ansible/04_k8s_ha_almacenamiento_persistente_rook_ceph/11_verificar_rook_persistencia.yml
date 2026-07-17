@@ -33,7 +33,7 @@
             storageClassName: ceph-block
             resources:
               requests:
-                storage: 1Gi
+                storage: "{{ rook_ceph_test_pvc_size }}"
 
     - name: Esperar a que el PVC de RBD esté Bound
       ansible.builtin.command: >
@@ -103,7 +103,7 @@
             storageClassName: ceph-filesystem
             resources:
               requests:
-                storage: 1Gi
+                storage: "{{ rook_ceph_test_pvc_size }}"
 
     - name: Esperar a que el PVC de CephFS esté Bound
       ansible.builtin.command: >

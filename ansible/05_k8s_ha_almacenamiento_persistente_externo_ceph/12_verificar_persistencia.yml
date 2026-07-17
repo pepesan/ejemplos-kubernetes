@@ -31,7 +31,7 @@
               - ReadWriteOnce
             resources:
               requests:
-                storage: 1Gi
+                storage: "{{ ceph_externo_test_pvc_size }}"
             storageClassName: ceph-block-external
 
     - name: Esperar a que el PVC esté Bound

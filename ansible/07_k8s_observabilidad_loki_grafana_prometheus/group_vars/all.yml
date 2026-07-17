@@ -24,6 +24,10 @@ kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
 # Tamaño de los volúmenes persistentes de Prometheus/Grafana/Loki (backend Longhorn)
 observability_storage_size: "5Gi"
 
+# Tamaño del volumen persistente de Alertmanager (deliberadamente más pequeño
+# que el de Prometheus/Grafana/Loki, solo guarda su propio estado de silencios)
+alertmanager_storage_size: "1Gi"
+
 # Versión del chart de Headlamp
 headlamp_chart_version: "0.43.0"
 
