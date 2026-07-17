@@ -1,0 +1,2 @@
+---
+- import_playbook: ../02_k8s_base_ha_3_managers_3_workers/04_instalar_containerd.yml

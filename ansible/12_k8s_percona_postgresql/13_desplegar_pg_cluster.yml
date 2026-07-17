@@ -1,0 +1,134 @@
+---
+- name: Desplegar el clúster PostgreSQL (Percona Operator, Patroni)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    pg_release_name: pg-cluster
+  tasks:
+    - name: Instalar el clúster PostgreSQL vía el chart pg-db de Percona
+      kubernetes.core.helm:
+        name: "{{ pg_release_name }}"
+        chart_ref: percona/pg-db
+        chart_version: "{{ percona_pg_db_chart_version }}"
+        release_namespace: postgres
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 10m0s
+        values:
+          # Sin esto, el chart nombra los recursos como "<release>-pg-db"
+          # (p.ej. "pg-cluster-pg-db"), no "pg-cluster" a secas, porque su
+          # helper de nombre solo usa el nombre del release tal cual si YA
+          # contiene el nombre del chart ("pg-db"). Se fuerza aquí para que
+          # coincida con el nombre usado en el resto de playbooks de este
+          # laboratorio (14, 16, 17, 18).
+          fullnameOverride: "{{ pg_release_name }}"
+          crVersion: "{{ percona_pg_chart_version }}"
+          postgresVersion: "{{ percona_pg_version }}"
+          image: "percona/percona-distribution-postgresql:{{ percona_pg_image_tag }}"
+          instances:
+            - name: instance1
+              replicas: "{{ pg_cluster_size }}"
+              resources:
+                requests:
+                  cpu: 400m
+                  memory: 700M
+              dataVolumeClaimSpec:
+                accessModes:
+                  - ReadWriteOnce
+                storageClassName: longhorn
+                resources:
+                  requests:
+                    storage: 3Gi
+              # Por defecto el chart solo pone anti-affinity PREFERENTE
+              # (preferredDuringSchedulingIgnoredDuringExecution), no
+              # obligatoria — en un clúster de 3 workers eso puede acabar
+              # con varias réplicas en el mismo nodo (visto en pruebas
+              # reales). Se fuerza aquí a REQUIRED para mantener la misma
+              # política que en los escenarios 10 y 11: nunca más de un Pod
+              # de BBDD por nodo de Kubernetes.
+              affinity:
+                podAntiAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    - topologyKey: kubernetes.io/hostname
+                      labelSelector:
+                        matchLabels:
+                          postgres-operator.crunchydata.com/data: postgres
+          proxy:
+            pgBouncer:
+              replicas: "{{ pg_bouncer_size }}"
+              image: "percona/percona-pgbouncer:{{ percona_pgbouncer_image_tag }}"
+          backups:
+            enabled: true
+            pgbackrest:
+              image: "percona/percona-pgbackrest:{{ percona_pgbackrest_image_tag }}"
+              repos:
+                - name: repo1
+                  volume:
+                    volumeClaimSpec:
+                      accessModes:
+                        - ReadWriteOnce
+                      storageClassName: longhorn
+                      resources:
+                        requests:
+                          storage: 1Gi
+          expose:
+            type: LoadBalancer
+
+    - name: Esperar a que el clúster PostgreSQL alcance el estado "ready"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get perconapgcluster {{ pg_release_name }} -o jsonpath={.status.state}
+      register: pg_status
+      until: pg_status.stdout | trim == "ready"
+      retries: 60
+      delay: 15
+      changed_when: false
+
+    # El Service LoadBalancer real que crea `expose.type: LoadBalancer` se
+    # llama "<cluster>-ha" (el que expone pgBouncer vía el proxy de alta
+    # disponibilidad de Patroni), no "<cluster>-pgbouncer" (ese es solo
+    # ClusterIP, uso interno).
+    - name: Esperar a que el Service LoadBalancer reciba una IP del LB-IPAM de Cilium
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get svc {{ pg_release_name }}-ha
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: pg_lb_ip
+      until: pg_lb_ip.stdout | trim | length > 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Comprobar si ya existe el archivo de la contraseña del usuario PostgreSQL
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/pg_password.txt"
+      register: pg_password_file_status
+
+    - name: Leer la contraseña generada automáticamente por el operador
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get secret {{ pg_release_name }}-pguser-{{ pg_release_name }}
+        -o jsonpath={.data.password}
+      register: pg_password_b64
+      changed_when: false
+      when: not pg_password_file_status.stat.exists
+
+    - name: Guardar la contraseña del usuario PostgreSQL en un archivo local
+      ansible.builtin.copy:
+        content: "{{ pg_password_b64.stdout | b64decode }}"
+        dest: "{{ playbook_dir }}/pg_password.txt"
+        mode: "0600"
+      when: not pg_password_file_status.stat.exists
+
+    - name: Mostrar datos de conexión al clúster PostgreSQL
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡CLÚSTER POSTGRESQL DESPLEGADO CON ÉXITO!"
+          - "  "
+          - "  Usuario: {{ pg_release_name }}   Base de datos: {{ pg_release_name }}"
+          - "  Contraseña guardada de forma segura en:"
+          - "  {{ playbook_dir }}/pg_password.txt"
+          - "  "
+          - "  Conexión interna (desde dentro del clúster, vía pgBouncer): {{ pg_release_name }}-pgbouncer.postgres.svc:5432"
+          - "  Conexión externa (IP propia asignada por el LB-IPAM de Cilium):"
+          - "  psql -h {{ pg_lb_ip.stdout }} -U {{ pg_release_name }} -d {{ pg_release_name }}"
+          - "════════════════════════════════════════════════════════════════"

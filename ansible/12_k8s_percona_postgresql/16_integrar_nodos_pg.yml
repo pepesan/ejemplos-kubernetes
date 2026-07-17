@@ -1,0 +1,80 @@
+---
+# Añade una réplica al clúster PostgreSQL (Patroni). A diferencia de los
+# escenarios 10 y 11 (motores Galera multi-máster, que exigen tamaño IMPAR
+# por quórum), Patroni usa un único primario + réplicas de solo lectura vía
+# streaming replication, sin esa restricción — se escala de una en una. Al
+# haber justo un nodo más que réplicas (gracias a 15_add_nodes.yml) y la
+# anti-affinity del operador, la nueva réplica cae en el nodo recién añadido.
+- name: Añadir una réplica al clúster PostgreSQL
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    pg_release_name: pg-cluster
+  tasks:
+    - name: Obtener el tamaño actual del clúster PostgreSQL
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get perconapgcluster {{ pg_release_name }}
+        -o 'jsonpath={.spec.instances[0].replicas}'
+      register: pg_current_size
+      changed_when: false
+
+    - name: "PRUEBA PREVIA: comprobar que todos los Pods están listos ANTES de escalar"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pods
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/instance-set=instance1
+        -o 'jsonpath={.items[*].status.containerStatuses[?(@.name=="database")].ready}'
+      register: pg_ready_before
+      changed_when: false
+      failed_when: pg_ready_before.stdout.split() | length != pg_current_size.stdout | int or 'false' in pg_ready_before.stdout.split()
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: "Estado previo OK: {{ pg_current_size.stdout }} réplicas, todas listas."
+
+    - name: Calcular el nuevo tamaño (una réplica más)
+      ansible.builtin.set_fact:
+        pg_new_size: "{{ pg_current_size.stdout | int + 1 }}"
+
+    # spec.instances es una LISTA, así que un merge patch normal (el que usa
+    # kubernetes.core.k8s con state: patched) REEMPLAZA el elemento entero en
+    # vez de fusionar campos — perdiendo dataVolumeClaimSpec y demás campos
+    # obligatorios del resto de ese elemento. Se usa en su lugar un JSON
+    # Patch (RFC 6902) apuntando solo al campo replicas.
+    - name: Ampliar el clúster PostgreSQL a {{ pg_new_size }} réplicas
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres patch perconapgcluster {{ pg_release_name }}
+        --type=json -p '[{"op": "replace", "path": "/spec/instances/0/replicas", "value": {{ pg_new_size | int }}}]'
+      changed_when: true
+
+    - name: Esperar a que todos los Pods (incluido el nuevo) estén listos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pods
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/instance-set=instance1
+        -o 'jsonpath={.items[*].status.containerStatuses[?(@.name=="database")].ready}'
+      register: pg_ready_after
+      until: pg_ready_after.stdout.split() | length == pg_new_size | int and 'false' not in pg_ready_after.stdout.split()
+      retries: 40
+      delay: 15
+      changed_when: false
+
+    - name: Comprobar en qué nodo de Kubernetes ha quedado programada la réplica nueva
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pods
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/instance-set=instance1
+        -o 'jsonpath={.items[?(@.spec.nodeName=="{{ node_name }}")].metadata.name}'
+      register: new_pod_check
+      changed_when: false
+      failed_when: false
+      when: node_name is defined
+
+    - name: Mostrar resumen de la ampliación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡RÉPLICA AÑADIDA AL CLÚSTER POSTGRESQL CON ÉXITO!"
+          - "  "
+          - "  Tamaño anterior: {{ pg_current_size.stdout }}   Tamaño actual: {{ pg_new_size }}"
+          - "  Todos los Pods listos y confirmados."
+          - "════════════════════════════════════════════════════════════════"

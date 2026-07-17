@@ -1,0 +1,48 @@
+---
+- name: Desplegar el Percona Operator for PostgreSQL
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear namespace postgres si no existe
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: postgres
+
+    # force_update: true, para que si el repo ya estaba añadido de un
+    # laboratorio anterior (mismo repo_url que en el escenario 10) refresque
+    # de verdad el índice en vez de reutilizar una caché local desactualizada
+    # que puede no tener todavía la última versión de un chart.
+    - name: Agregar el repositorio de Percona a Helm
+      kubernetes.core.helm_repository:
+        name: percona
+        repo_url: https://percona.github.io/percona-helm-charts/
+        force_update: true
+
+    - name: Instalar el Percona Operator for PostgreSQL (pg-operator) vía Helm
+      kubernetes.core.helm:
+        name: pg-operator
+        chart_ref: percona/pg-operator
+        chart_version: "{{ percona_pg_chart_version }}"
+        release_namespace: postgres
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 5m0s
+
+    - name: Esperar a que el operador de Percona esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres rollout status deployment/pg-operator --timeout=180s
+      changed_when: false
+
+    - name: Mostrar resumen del despliegue del operador
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡PERCONA OPERATOR FOR POSTGRESQL DESPLEGADO CON ÉXITO!"
+          - "════════════════════════════════════════════════════════════════"

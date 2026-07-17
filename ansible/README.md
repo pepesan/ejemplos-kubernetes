@@ -260,6 +260,27 @@ chmod +x run_all.sh destroy_all.sh
 ./destroy_all.sh   # Para limpiar y borrar todo
 ```
 
+### 12. Percona Operator for PostgreSQL (`12_k8s_percona_postgresql`)
+Ubicación: [12_k8s_percona_postgresql/](12_k8s_percona_postgresql/)
+
+Tercero de la serie de laboratorios de operadores de bases de datos, de nuevo del fabricante Percona (como el 10). Despliega PostgreSQL con alta disponibilidad vía **Patroni** (un primario + réplicas de solo lectura, no multi-máster como Galera). Mismo diseño hiperconvergente de 6 nodos + Cilium (CNI + LoadBalancer L2, sin Gateway API) que los escenarios 10 y 11.
+
+Automatiza:
+*   Instalación del Percona Operator for PostgreSQL (`percona/pg-operator`) y del clúster (`percona/pg-db`, CRD `PerconaPGCluster`) con 3 réplicas, pgBouncer como *connection pooler* y backups locales con pgBackRest.
+*   Persistencia de los 3 nodos en volúmenes Longhorn, con anti-affinity obligatoria (un Pod de BBDD por nodo, forzada explícitamente).
+*   Exposición externa vía el `Service` `LoadBalancer` `<cluster>-ha` (delante de pgBouncer).
+*   Verificación de la replicación (escritura en el primario, lectura en una réplica) y del acceso TCP externo.
+*   Escalado del clúster (de una en una réplica: Patroni no exige tamaño impar, a diferencia de Galera) y actualización del motor PostgreSQL sin downtime.
+*   Contraseña del usuario generada automáticamente por el operador y guardada en `pg_password.txt`, nunca en pantalla.
+
+Uso rápido:
+```bash
+cd 12_k8s_percona_postgresql
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
 ---
 
 ## 📐 Decisiones de Diseño y Arquitectura

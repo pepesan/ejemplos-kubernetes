@@ -1,0 +1,86 @@
+---
+- name: Verificar la replicación PostgreSQL (Patroni) y el acceso externo
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    pg_release_name: pg-cluster
+  tasks:
+    - name: Leer la contraseña del usuario PostgreSQL desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/pg_password.txt"
+      register: pg_password_slurp
+
+    - name: Fijar la contraseña como variable
+      ansible.builtin.set_fact:
+        pg_password: "{{ pg_password_slurp.content | b64decode | trim }}"
+
+    - name: Identificar el Pod primario (Patroni)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pod
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/role=primary
+        -o jsonpath={.items[0].metadata.name}
+      register: pg_primary_pod
+      changed_when: false
+
+    - name: Identificar un Pod réplica (Patroni)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pod
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/role=replica
+        -o jsonpath={.items[0].metadata.name}
+      register: pg_replica_pod
+      changed_when: false
+
+    # `environment:` de Ansible solo fija la variable en el proceso local de
+    # `kubectl`, no dentro del contenedor donde corre el `exec` — hay que
+    # pasarla como parte del propio comando remoto (`env VAR=valor ...`).
+    - name: Escribir datos en el Pod primario
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres exec {{ pg_primary_pod.stdout }} -c database --
+        env PGPASSWORD={{ pg_password }}
+        psql -h 127.0.0.1 -U {{ pg_release_name }} -d {{ pg_release_name }}
+        -c "CREATE TABLE IF NOT EXISTS prueba (id INT PRIMARY KEY, valor VARCHAR(50)); INSERT INTO prueba VALUES (1, 'replicacion-postgres-ok') ON CONFLICT (id) DO UPDATE SET valor = EXCLUDED.valor;"
+      register: write_result
+      changed_when: false
+      no_log: true
+
+    - name: Esperar a que la escritura se replique (streaming replication, pero damos un margen)
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Leer los datos desde el Pod réplica, para confirmar la replicación
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres exec {{ pg_replica_pod.stdout }} -c database --
+        env PGPASSWORD={{ pg_password }}
+        psql -h 127.0.0.1 -U {{ pg_release_name }} -d {{ pg_release_name }} -t -A
+        -c "SELECT valor FROM prueba WHERE id=1;"
+      register: read_result
+      changed_when: false
+      no_log: true
+      failed_when: "'replicacion-postgres-ok' not in read_result.stdout"
+
+    - name: Obtener la IP LoadBalancer de pgBouncer
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get svc {{ pg_release_name }}-ha
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: pg_lb_ip
+      changed_when: false
+
+    - name: Comprobar el acceso TCP externo al clúster vía la IP LoadBalancer
+      ansible.builtin.command: >
+        python3 -c "import socket; socket.create_connection(('{{ pg_lb_ip.stdout }}', 5432), timeout=10); print('conexion-tcp-ok')"
+      register: external_tcp_check
+      changed_when: false
+      failed_when: "'conexion-tcp-ok' not in external_tcp_check.stdout"
+
+    - name: Mostrar resumen de la verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  VERIFICACIÓN DEL CLÚSTER POSTGRESQL (PATRONI)"
+          - "  "
+          - "  Escritura en el primario ({{ pg_primary_pod.stdout }}) y lectura en una"
+          - "  réplica ({{ pg_replica_pod.stdout }}): replicación confirmada."
+          - "  Acceso TCP externo vía pgBouncer ({{ pg_lb_ip.stdout }}:5432): conexión OK."
+          - "════════════════════════════════════════════════════════════════"

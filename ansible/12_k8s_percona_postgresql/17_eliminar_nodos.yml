@@ -1,0 +1,191 @@
+---
+# Quita UNA réplica del clúster PostgreSQL (Patroni) Y el nodo de Kubernetes
+# que la alojaba, en ese orden: primero se reduce spec.instances[0].replicas
+# para que el propio operador retire la réplica de forma ordenada, y solo
+# cuando esa réplica ha desaparecido del todo se destruye la VM que la
+# alojaba.
+#
+# Idempotente incluso si una ejecución anterior quedó a medias: si el
+# clúster PostgreSQL ya está en el tamaño mínimo, se salta el escalado y va
+# directo a terminar de limpiar el nodo de Kubernetes indicado.
+- name: Quitar una réplica de PostgreSQL y su nodo de Kubernetes dedicado
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    pg_release_name: pg-cluster
+    pg_min_size: 3
+  tasks:
+    - name: Validar que se ha especificado el nodo a eliminar
+      ansible.builtin.fail:
+        msg: "Por favor, especifica el nodo a eliminar usando: -e 'node_name=k8s-worker4'"
+      when: node_name is not defined
+
+    - name: Obtener el tamaño actual del clúster PostgreSQL
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get perconapgcluster {{ pg_release_name }}
+        -o jsonpath={.spec.instances[0].replicas}
+      register: pg_current_size
+      changed_when: false
+
+    - name: Fijar si el clúster PostgreSQL ya está en el tamaño mínimo (escalado ya hecho en una ejecución anterior)
+      ansible.builtin.set_fact:
+        pg_ya_reducido: "{{ pg_current_size.stdout | int <= pg_min_size }}"
+
+    - name: Identificar el Pod que está actualmente en el nodo saliente
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pods
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/instance-set=instance1
+        --field-selector spec.nodeName={{ node_name }}
+        -o jsonpath={.items[0].metadata.name}
+      register: outgoing_pod
+      changed_when: false
+      failed_when: false
+      when: not pg_ya_reducido
+
+    - name: Avisar si no se encuentra ningún Pod de PostgreSQL en el nodo indicado
+      ansible.builtin.debug:
+        msg: >
+          AVISO: no se ha encontrado ningún Pod de PostgreSQL en el nodo {{ node_name }}.
+          Continúa igualmente, pero comprueba manualmente qué réplica va a retirar el operador.
+      when:
+        - not pg_ya_reducido
+        - outgoing_pod.stdout | default('') | length == 0
+
+    - name: Calcular el nuevo tamaño (una réplica menos)
+      ansible.builtin.set_fact:
+        pg_new_size: "{{ pg_current_size.stdout | int - 1 if not pg_ya_reducido else pg_current_size.stdout | int }}"
+
+    # spec.instances es una LISTA: un merge patch reemplazaría el elemento
+    # entero, perdiendo dataVolumeClaimSpec y otros campos obligatorios. Se
+    # usa un JSON Patch (RFC 6902) apuntando solo al campo replicas (misma
+    # razón que en 16_integrar_nodos_pg.yml).
+    - name: Reducir el clúster PostgreSQL a {{ pg_new_size }} réplicas
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres patch perconapgcluster {{ pg_release_name }}
+        --type=json -p '[{"op": "replace", "path": "/spec/instances/0/replicas", "value": {{ pg_new_size | int }}}]'
+      changed_when: true
+      when: not pg_ya_reducido
+
+    - name: Esperar a que el Pod saliente desaparezca
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pod {{ outgoing_pod.stdout }}
+      register: outgoing_pod_check
+      until: outgoing_pod_check.rc != 0
+      retries: 40
+      delay: 15
+      failed_when: false
+      changed_when: false
+      when:
+        - not pg_ya_reducido
+        - outgoing_pod.stdout | default('') | length > 0
+
+    # El StatefulSet del instance-set no borra el PVC del Pod que sale al
+    # reducir su tamaño (comportamiento por defecto de Kubernetes). Ese
+    # volumen ya no lo usa nadie, pero mientras exista, Longhorn mantiene
+    # vivo el Pod "instance-manager" en el nodo donde tenga réplica — y ese
+    # Pod no es un DaemonSet real, así que bloquea indefinidamente el
+    # `drain` de más abajo. Se borra explícitamente antes de tocar el nodo,
+    # identificándolo por la etiqueta que el operador pone en cada PVC con
+    # el nombre exacto del Pod al que pertenecía (no por un ordinal fijo,
+    # ya que este operador no nombra los Pods con sufijos deterministas).
+    - name: Eliminar el PVC huérfano de datos del Pod ya retirado
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres delete pvc
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/data=postgres,postgres-operator.crunchydata.com/instance={{ outgoing_pod.stdout | regex_replace('-0$', '') }}
+        --ignore-not-found
+      when:
+        - not pg_ya_reducido
+        - outgoing_pod.stdout | default('') | length > 0
+      changed_when: true
+
+    - name: Comprobar si el nodo existe en el clúster, drenarlo y eliminarlo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node {{ node_name }}
+      register: node_check
+      failed_when: false
+      changed_when: false
+
+    # Este laboratorio es hiperconvergente: este nodo también aloja réplicas
+    # de Longhorn, no solo Pods de PostgreSQL. El Pod "instance-manager" de
+    # Longhorn NO es un DaemonSet real (es un recurso "InstanceManager"
+    # propio de Longhorn) y tiene su propio PodDisruptionBudget con 0
+    # disrupciones permitidas mientras gestione algún volumen — por eso
+    # `kubectl drain --ignore-daemonsets` se queda colgado indefinidamente si
+    # no se desaloja Longhorn de ese nodo ANTES de drenarlo (mismo bug ya
+    # corregido en los escenarios 03, 10 y 11).
+    - name: Desactivar la programación de réplicas de Longhorn en el nodo saliente
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} patch -n longhorn-system nodes.longhorn.io {{ node_name }}
+        --type merge -p '{"spec":{"allowScheduling":false}}'
+      when: node_check.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Esperar a que Longhorn deje de asignar réplicas reales a ese nodo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get replicas.longhorn.io -n longhorn-system
+        -o 'jsonpath={.items[?(@.spec.nodeID=="{{ node_name }}")].metadata.name}'
+      when: node_check.rc == 0
+      register: real_replicas_check
+      until: real_replicas_check.stdout | trim == ""
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Eliminar directamente el Pod instance-manager ya vacío de ese nodo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} delete pods -n longhorn-system
+        --field-selector spec.nodeName={{ node_name }} -l longhorn.io/component=instance-manager
+        --ignore-not-found --now
+      when: node_check.rc == 0
+      changed_when: true
+
+    - name: Drenar el nodo de Kubernetes de forma segura (evacuar el resto de Pods)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} drain {{ node_name }}
+        --delete-emptydir-data --ignore-daemonsets --force
+      when: node_check.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Restablecer configuración de kubeadm en el nodo a eliminar si está accesible
+      ansible.builtin.command: >
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 root@{{ node_name }} "kubeadm reset -f"
+      register: kubeadm_reset_out
+      failed_when: false
+      changed_when: false
+      when: node_check.rc == 0
+
+    - name: Eliminar el nodo del clúster de Kubernetes
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} delete node {{ node_name }}
+      when: node_check.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Comprobar si la VM de LXD existe
+      ansible.builtin.command: >
+        lxc info {{ node_name }}
+      register: lxc_check
+      failed_when: false
+      changed_when: false
+
+    - name: Detener y eliminar la máquina virtual LXD del nodo
+      community.general.lxd_container:
+        name: "{{ node_name }}"
+        state: absent
+        force_stop: true
+        timeout: 30
+      when: lxc_check.rc == 0
+
+    - name: Mostrar resumen de la eliminación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡RÉPLICA Y SU NODO ELIMINADOS CON ÉXITO!"
+          - "  "
+          - "  Tamaño anterior de PostgreSQL: {{ pg_current_size.stdout }}   Tamaño actual: {{ pg_new_size }}"
+          - "  Nodo '{{ node_name }}' drenado, eliminado de Kubernetes y su VM destruida."
+          - "════════════════════════════════════════════════════════════════"

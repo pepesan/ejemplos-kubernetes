@@ -1,0 +1,54 @@
+---
+# Conexión SSH: acceso como root sin contraseña (clave inyectada en la imagen base)
+ansible_user: root
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+# Parámetros de los nodos virtuales LXD (La plantilla 'k8s-template' debe estar basada en Ubuntu 26.04)
+lxd_image: k8s-template
+lxd_network: lxdbr0
+
+# Módulos de kernel necesarios para Kubernetes/CNI en LXD
+lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
+
+# Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
+k8s_major_version: "v1.36"
+k8s_pod_network_cidr: "10.244.0.0/16" # CIDR de pods, gestionado por Cilium (modo cluster-pool)
+
+# VIP de alta disponibilidad del plano de control (kube-vip) — igual que en el 02
+k8s_vip_address: "10.207.154.49"
+k8s_vip_port: 6443
+k8s_vip_interface: enp5s0
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+
+# Cilium sustituye a Flannel como CNI (igual que en el escenario 08) y provee
+# su LoadBalancer L2 nativo (LB-IPAM + L2Announcement) para exponer la BBDD
+# con un Service tipo LoadBalancer normal, sin Gateway API ni MetalLB.
+cilium_version: "1.19.5"
+cilium_lb_ip_range: "10.207.154.70-10.207.154.80"
+
+# Versión de los charts del Percona Operator for PostgreSQL (pg-operator y
+# pg-db van siempre parejos, misma versión que el propio operador)
+percona_pg_chart_version: "3.0.0"
+percona_pg_db_chart_version: "3.0.1"
+
+# Versión de la imagen del motor PostgreSQL (Percona Distribution for
+# PostgreSQL), independiente de la versión del chart/operador de arriba.
+# Se fija deliberadamente una versión algo antigua (no la última disponible)
+# para poder simular una actualización real con 18_actualizar_motor_pg.yml.
+percona_pg_image_tag: "18.1-1"
+percona_pg_image_tag_upgrade: "18.4-4"
+percona_pg_version: 18
+
+# Versión de la imagen de pgBouncer que empaqueta el propio chart de Percona.
+percona_pgbouncer_image_tag: "1.25.2-1"
+percona_pgbackrest_image_tag: "2.58.0-2"
+
+# Tamaño del clúster PostgreSQL (1 primario + N réplicas vía Patroni) y de pgBouncer
+pg_cluster_size: 3
+pg_bouncer_size: 3
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"
+
+# Versión del chart de Longhorn
+longhorn_chart_version: "1.12.0"

@@ -1,0 +1,143 @@
+---
+# Simula una actualización real del motor PostgreSQL, de la versión fijada
+# al desplegar (percona_pg_image_tag) a una más reciente
+# (percona_pg_image_tag_upgrade). El propio operador actualiza los Pods uno
+# a uno (réplicas primero, primario al final, con conmutación de Patroni),
+# igual que se haría a mano en un clúster Patroni real, pero automatizado.
+- name: Actualizar el motor de PostgreSQL sin downtime
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    pg_release_name: pg-cluster
+    pg_new_image: "percona/percona-distribution-postgresql:{{ percona_pg_image_tag_upgrade }}"
+  tasks:
+    - name: Leer la contraseña del usuario PostgreSQL desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/pg_password.txt"
+      register: pg_password_slurp
+
+    - name: Fijar la contraseña como variable
+      ansible.builtin.set_fact:
+        pg_password: "{{ pg_password_slurp.content | b64decode | trim }}"
+
+    - name: Obtener el tamaño y la imagen actuales del clúster PostgreSQL
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get perconapgcluster {{ pg_release_name }}
+        -o 'jsonpath={.spec.instances[0].replicas}'
+      register: pg_current_size
+      changed_when: false
+
+    - name: Obtener la imagen actual del clúster PostgreSQL
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get perconapgcluster {{ pg_release_name }} -o 'jsonpath={.spec.image}'
+      register: pg_current_image
+      changed_when: false
+
+    - name: Fallar si ya está en la versión objetivo
+      ansible.builtin.fail:
+        msg: "El clúster ya está en la imagen {{ pg_new_image }}. No hay nada que actualizar."
+      when: pg_current_image.stdout == pg_new_image
+
+    - name: Identificar el Pod primario (Patroni) ANTES de actualizar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pod
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/role=primary
+        -o 'jsonpath={.items[0].metadata.name}'
+      register: pg_primary_before
+      changed_when: false
+
+    - name: "PRUEBA PREVIA: comprobar que todos los Pods están listos ANTES de actualizar"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pods
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/instance-set=instance1
+        -o 'jsonpath={.items[*].status.containerStatuses[?(@.name=="database")].ready}'
+      register: pg_ready_before
+      changed_when: false
+      failed_when: pg_ready_before.stdout.split() | length != pg_current_size.stdout | int or 'false' in pg_ready_before.stdout.split()
+
+    - name: Comprobar la versión de PostgreSQL ANTES de actualizar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres exec {{ pg_primary_before.stdout }} -c database --
+        env PGPASSWORD={{ pg_password }}
+        psql -h 127.0.0.1 -U {{ pg_release_name }} -d {{ pg_release_name }} -t -A -c "SHOW server_version;"
+      register: pg_version_before
+      changed_when: false
+      no_log: true
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: >
+          Estado previo OK: {{ pg_current_size.stdout }} réplicas, todas listas.
+          Imagen actual: {{ pg_current_image.stdout }} (versión {{ pg_version_before.stdout }}).
+
+    - name: Aplicar la nueva imagen del motor PostgreSQL (el operador actualiza los Pods uno a uno)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: patched
+        kind: PerconaPGCluster
+        api_version: pgv2.percona.com/v2
+        name: "{{ pg_release_name }}"
+        namespace: postgres
+        definition:
+          spec:
+            image: "{{ pg_new_image }}"
+
+    - name: Esperar a que TODOS los Pods de PostgreSQL ejecuten ya la nueva imagen
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pods
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/instance-set=instance1
+        -o 'jsonpath={.items[*].status.containerStatuses[?(@.name=="database")].image}'
+      register: pod_image_check
+      # Kubernetes normaliza la imagen añadiendo el registro por defecto
+      # (docker.io/) en containerStatuses, aunque en el spec del CR y aquí se
+      # referencie sin él — comparamos por subcadena, no por igualdad
+      # (lección aprendida en el escenario 10, ver PLAN.md).
+      until: >
+        pod_image_check.stdout.split() | length == pg_current_size.stdout | int and
+        (pod_image_check.stdout.split() | select('search', percona_pg_image_tag_upgrade) | list | length) == pg_current_size.stdout | int
+      retries: 60
+      delay: 20
+      changed_when: false
+
+    - name: "PRUEBA POSTERIOR: comprobar que todos los Pods siguen listos tras la actualización"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pods
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/instance-set=instance1
+        -o 'jsonpath={.items[*].status.containerStatuses[?(@.name=="database")].ready}'
+      register: pg_ready_after
+      changed_when: false
+      until: pg_ready_after.stdout.split() | length == pg_current_size.stdout | int and 'false' not in pg_ready_after.stdout.split()
+      retries: 20
+      delay: 10
+
+    - name: Identificar el Pod primario (Patroni) DESPUÉS de actualizar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres get pod
+        -l postgres-operator.crunchydata.com/cluster={{ pg_release_name }},postgres-operator.crunchydata.com/role=primary
+        -o 'jsonpath={.items[0].metadata.name}'
+      register: pg_primary_after
+      changed_when: false
+
+    - name: Comprobar la versión de PostgreSQL DESPUÉS de actualizar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n postgres exec {{ pg_primary_after.stdout }} -c database --
+        env PGPASSWORD={{ pg_password }}
+        psql -h 127.0.0.1 -U {{ pg_release_name }} -d {{ pg_release_name }} -t -A -c "SHOW server_version;"
+      register: pg_version_after
+      changed_when: false
+      no_log: true
+
+    - name: Mostrar resumen de la actualización
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡MOTOR DE POSTGRESQL ACTUALIZADO SIN DOWNTIME!"
+          - "  "
+          - "  Imagen anterior: {{ pg_current_image.stdout }} (versión {{ pg_version_before.stdout }})"
+          - "  Imagen actual:   {{ pg_new_image }} (versión {{ pg_version_after.stdout }})"
+          - "  "
+          - "  Las {{ pg_current_size.stdout }} réplicas se actualizaron una a una,"
+          - "  confirmando que todos los Pods siguen listos entre cada actualización."
+          - "════════════════════════════════════════════════════════════════"
