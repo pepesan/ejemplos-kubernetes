@@ -1,0 +1,66 @@
+---
+# Conexión SSH: acceso como root sin contraseña (clave inyectada en la imagen base)
+ansible_user: root
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+# Parámetros de los nodos virtuales LXD (La plantilla 'k8s-template' debe estar basada en Ubuntu 26.04)
+lxd_image: k8s-template
+lxd_network: lxdbr0
+
+# Módulos de kernel necesarios para Kubernetes/CNI en LXD
+lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
+
+# Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
+k8s_major_version: "v1.36"
+k8s_pod_network_cidr: "10.244.0.0/16" # CIDR de pods, gestionado por Cilium (modo cluster-pool)
+
+# VIP de alta disponibilidad del plano de control (kube-vip) — igual que en el 02
+k8s_vip_address: "10.207.154.49"
+k8s_vip_port: 6443
+k8s_vip_interface: enp5s0
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+
+# Cilium sustituye a Flannel como CNI (igual que en el escenario 08) y provee
+# su LoadBalancer L2 nativo (LB-IPAM + L2Announcement) para exponer la BBDD
+# con un Service tipo LoadBalancer normal, sin Gateway API ni MetalLB.
+cilium_version: "1.19.5"
+cilium_lb_ip_range: "10.207.154.70-10.207.154.80"
+
+# Versión de los charts del Percona Operator for MongoDB (psmdb-operator y
+# psmdb-db van siempre parejos, misma versión que el propio operador)
+# Se probó bajar a la 1.21.2 pensando que la 1.22.0 tenía un bug de
+# propagación de `env`/`envFrom` al StatefulSet de mongos, pero resultó ser
+# peor: el CRD de la 1.21.2 ni siquiera reconoce el campo `env` en
+# replsets/configsvrReplSet/mongos ("unknown field", comprobado en vivo con
+# `kubectl patch`) — es una versión más antigua sin ese campo en absoluto.
+# La 1.22.0 SÍ soporta y aplica correctamente `env` para replsets y
+# configsvrReplSet (mongod estable, confirmado en pruebas reales); el único
+# problema real y específico es que no lo propaga al StatefulSet de mongos
+# en concreto (ver PLAN.md) — se mantiene 1.22.0 y se acepta ese caso
+# concreto con reintentos adicionales en vez de cambiar de versión.
+percona_psmdb_chart_version: "1.22.0"
+percona_psmdb_db_chart_version: "1.22.2"
+
+# Versión de la imagen del motor MongoDB (Percona Server for MongoDB),
+# independiente de la versión del chart/operador de arriba. Se fija
+# deliberadamente una versión algo antigua (no la última disponible) para
+# poder simular una actualización real con 18_actualizar_motor_mongodb.yml.
+mongodb_image_tag: "8.0.19-7"
+mongodb_image_tag_upgrade: "8.0.26-11"
+
+# Tamaño (nº de réplicas) de cada shard, del replica set de config servers y
+# del número de routers mongos
+mongodb_shard_size: 3
+mongodb_configsvr_size: 3
+mongodb_mongos_size: 3
+
+# Tamaño del volumen persistente de datos de cada réplica de shard, y del
+# de cada config server
+mongodb_storage_size: "3Gi"
+mongodb_configsvr_storage_size: "3Gi"
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"
+
+# Versión del chart de Longhorn
+longhorn_chart_version: "1.12.0"

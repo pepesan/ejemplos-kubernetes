@@ -1,0 +1,221 @@
+---
+# Quita la shard rs2 (añadida por 16_integrar_shard.yml) Y sus tres nodos de
+# Kubernetes dedicados. Basta con retirarla del CR (spec.replsets es una
+# LISTA: se usa un JSON Patch "remove" por índice, no un merge patch — misma
+# razón que en 16_integrar_shard.yml) y esperar: el propio operador de
+# Percona, al ver que una réplica desaparece de la lista, se encarga él
+# solo de DRENARLA con seguridad (llama a `removeShard` en cada
+# reconciliación hasta que MongoDB confirma el drenaje completo y migra los
+# chunks a los shards restantes) y de borrar su StatefulSet una vez
+# terminado — no hay que duplicar ese trabajo a mano.
+#
+# (Se probó primero llamando a `removeShard` manualmente antes de tocar el
+# CR, pensando que había que forzar el drenaje nosotros mismos, pero esto
+# choca con el propio operador: al ver la réplica retirada del CR, intenta
+# llamar a `removeShard` él también, y como para entonces el shard ya no
+# existe en Mongo, esa llamada falla con "ShardNotFound" y deja el
+# Reconcile permanentemente en error sin borrar el StatefulSet — confirmado
+# en vivo. Dejar que sea el operador el único que llama a `removeShard`
+# evita todo ese problema.)
+#
+# Idempotente incluso si una ejecución anterior quedó a medias: si la shard
+# ya no está en el CR, se salta directamente a la limpieza de los nodos.
+- name: Quitar la shard rs2 y sus tres nodos de Kubernetes dedicados
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mongodb_release_name: mongodb-cluster
+    shard_name: rs2
+  tasks:
+    - name: Validar que se han especificado los tres nodos a eliminar
+      ansible.builtin.fail:
+        msg: "Por favor, especifica los tres nodos a eliminar usando: -e 'node_name=k8s-worker7 node_name2=k8s-worker8 node_name3=k8s-worker9'"
+      when: node_name is not defined or node_name2 is not defined or node_name3 is not defined
+
+    - name: Leer la contraseña de databaseAdmin desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/mongodb_password.txt"
+      register: mongodb_password_slurp
+
+    - name: Fijar la contraseña como variable
+      ansible.builtin.set_fact:
+        mongodb_password: "{{ mongodb_password_slurp.content | b64decode | trim }}"
+
+    - name: Obtener la lista actual de shards del CR
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get perconaservermongodb {{ mongodb_release_name }}
+        -o jsonpath={.spec.replsets[*].name}
+      register: current_replsets
+      changed_when: false
+
+    - name: Fijar si la shard {{ shard_name }} ya se retiró en una ejecución anterior
+      ansible.builtin.set_fact:
+        shard_ya_retirada: "{{ shard_name not in current_replsets.stdout.split() }}"
+
+    - name: "PRUEBA PREVIA: comprobar que la shard {{ shard_name }} está activa ANTES de retirarla"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongodb_release_name }}-mongos-0 -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "JSON.stringify(db.adminCommand({listShards: 1}).shards.filter(s => s._id === '{{ shard_name }}'))"
+      register: shard_before
+      changed_when: false
+      no_log: true
+      failed_when: shard_name not in shard_before.stdout
+      when: not shard_ya_retirada
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: "Estado previo OK: shard {{ shard_name }} activa, a punto de retirarse."
+      when: not shard_ya_retirada
+
+    - name: Retirar la shard {{ shard_name }} del CR (JSON Patch, elimina el elemento de la lista)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb patch perconaservermongodb {{ mongodb_release_name }}
+        --type=json -p '[{"op": "remove", "path": "/spec/replsets/{{ current_replsets.stdout.split().index(shard_name) }}"}]'
+      changed_when: true
+      when: not shard_ya_retirada
+
+    # El propio operador drena la shard (removeShard, con reintentos hasta
+    # "completed") y borra su StatefulSet una vez migrados los chunks — no
+    # hay que hacerlo a mano, solo esperar a que termine.
+    - name: Esperar a que los Pods de la shard {{ shard_name }} desaparezcan (el operador la drena y la retira solo)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get pods
+        -l app.kubernetes.io/instance={{ mongodb_release_name }},app.kubernetes.io/replset={{ shard_name }}
+        --no-headers
+      register: shard_pods_check
+      until: shard_pods_check.stdout | trim == ""
+      retries: 40
+      delay: 15
+      changed_when: false
+      when: not shard_ya_retirada
+
+    - name: Esperar a que el clúster MongoDB vuelva a reportar el estado "ready"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get perconaservermongodb {{ mongodb_release_name }} -o jsonpath={.status.state}
+      register: mongodb_status
+      until: mongodb_status.stdout | trim == "ready"
+      retries: 40
+      delay: 15
+      changed_when: false
+      when: not shard_ya_retirada
+
+    # El StatefulSet de la shard retirada no borra sus PVC (comportamiento
+    # por defecto de Kubernetes). Igual que en los escenarios 03/10/11/12,
+    # mientras existan, Longhorn mantiene vivo el Pod "instance-manager" en
+    # cada nodo, bloqueando el `drain` de más abajo.
+    - name: Eliminar los PVC de datos de la shard {{ shard_name }} ya retirada
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb delete pvc
+        -l app.kubernetes.io/instance={{ mongodb_release_name }},app.kubernetes.io/replset={{ shard_name }}
+        --ignore-not-found
+      when: not shard_ya_retirada
+      changed_when: true
+
+    - name: Comprobar si los nodos existen en el clúster, drenarlos y eliminarlos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node {{ item }}
+      register: node_check
+      failed_when: false
+      changed_when: false
+      loop:
+        - "{{ node_name }}"
+        - "{{ node_name2 }}"
+        - "{{ node_name3 }}"
+
+    # Este laboratorio es hiperconvergente: estos nodos también alojan
+    # réplicas de Longhorn, no solo Pods de MongoDB. El Pod "instance-manager"
+    # de Longhorn NO es un DaemonSet real y tiene su propio
+    # PodDisruptionBudget con 0 disrupciones permitidas mientras gestione
+    # algún volumen — por eso `kubectl drain --ignore-daemonsets` se queda
+    # colgado indefinidamente si no se desaloja Longhorn de esos nodos ANTES
+    # de drenarlos (mismo bug ya corregido en los escenarios 03, 10, 11 y 12).
+    - name: Desactivar la programación de réplicas de Longhorn en los nodos salientes
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} patch -n longhorn-system nodes.longhorn.io {{ item.item }}
+        --type merge -p '{"spec":{"allowScheduling":false}}'
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Esperar a que Longhorn deje de asignar réplicas reales a esos nodos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get replicas.longhorn.io -n longhorn-system
+        -o 'jsonpath={.items[?(@.spec.nodeID=="{{ item.item }}")].metadata.name}'
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      register: real_replicas_check
+      until: real_replicas_check.stdout | trim == ""
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Eliminar directamente el Pod instance-manager ya vacío de esos nodos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} delete pods -n longhorn-system
+        --field-selector spec.nodeName={{ item.item }} -l longhorn.io/component=instance-manager
+        --ignore-not-found --now
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      changed_when: true
+
+    - name: Drenar los nodos de Kubernetes de forma segura (evacuar el resto de Pods)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} drain {{ item.item }}
+        --delete-emptydir-data --ignore-daemonsets --force
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Restablecer configuración de kubeadm en los nodos a eliminar si están accesibles
+      ansible.builtin.command: >
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 root@{{ item.item }} "kubeadm reset -f"
+      loop: "{{ node_check.results }}"
+      register: kubeadm_reset_out
+      failed_when: false
+      changed_when: false
+      when: item.rc == 0
+
+    - name: Eliminar los nodos del clúster de Kubernetes
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} delete node {{ item.item }}
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Comprobar si las VMs de LXD existen
+      ansible.builtin.command: >
+        lxc info {{ item }}
+      register: lxc_check
+      failed_when: false
+      changed_when: false
+      loop:
+        - "{{ node_name }}"
+        - "{{ node_name2 }}"
+        - "{{ node_name3 }}"
+
+    - name: Detener y eliminar las máquinas virtuales LXD de los nodos
+      community.general.lxd_container:
+        name: "{{ item.item }}"
+        state: absent
+        force_stop: true
+        timeout: 30
+      loop: "{{ lxc_check.results }}"
+      when: item.rc == 0
+
+    - name: Mostrar resumen de la eliminación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡SHARD {{ shard_name }} Y SUS TRES NODOS ELIMINADOS CON ÉXITO!"
+          - "  "
+          - "  El operador la drenó (removeShard) y borró su StatefulSet,"
+          - "  sin pérdida de datos: sus chunks se migraron a rs0/rs1."
+          - "  Nodos '{{ node_name }}', '{{ node_name2 }}' y '{{ node_name3 }}' drenados,"
+          - "  eliminados de Kubernetes y sus VMs destruidas."
+          - "════════════════════════════════════════════════════════════════"

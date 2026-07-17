@@ -281,6 +281,28 @@ chmod +x run_all.sh destroy_all.sh
 ./destroy_all.sh   # Para limpiar y borrar todo
 ```
 
+### 13. Percona Operator for MongoDB — PSMDB (`13_k8s_percona_mongodb`)
+Ubicación: [13_k8s_percona_mongodb/](13_k8s_percona_mongodb/)
+
+Cuarto y último laboratorio de la serie de operadores de bases de datos, de nuevo del fabricante Percona (como el 10 y el 12). Despliega un clúster MongoDB con **sharding real**: 2 shards de 3 réplicas cada uno, más config servers y routers `mongos`. Diseño hiperconvergente de **9 nodos** (3 managers + 6 workers, uno por réplica de shard) + Cilium (CNI + LoadBalancer L2, sin Gateway API).
+
+Automatiza:
+*   Instalación del Percona Operator for MongoDB (`percona/psmdb-operator`) y del clúster (`percona/psmdb-db`, CRD `PerconaServerMongoDB`) con 2 shards de 3 réplicas, 3 config servers y 3 routers `mongos`.
+*   Anti-affinity **obligatoria** por shard (`affinity.advanced`, no la preferente por defecto del chart): las réplicas de un mismo shard nunca comparten nodo Kubernetes, para que la caída de un nodo nunca tumbe un shard entero.
+*   Persistencia de todos los nodos en volúmenes Longhorn.
+*   Verificación del sharding (creación de una colección shardeada, reparto de datos comprobado entre shards) y del acceso TCP externo vía el `Service` `LoadBalancer` de `mongos`.
+*   Escalado en caliente: añadir un shard nuevo con sus 3 nodos dedicados (`15_add_nodes.yml` + `16_integrar_shard.yml`), y retirarlo de forma segura con `removeShard` (`17_eliminar_shard.yml`) — el propio operador se encarga de drenar los chunks a los shards restantes antes de borrar sus Pods.
+*   Actualización del motor MongoDB sin downtime (rolling upgrade Pod a Pod gestionado por el operador).
+*   Contraseñas generadas automáticamente por el operador (`databaseAdmin` para uso normal, `clusterAdmin` para gestión de shards) y guardadas en `mongodb_password.txt`, nunca en pantalla.
+
+Uso rápido:
+```bash
+cd 13_k8s_percona_mongodb
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
 ---
 
 ## 📐 Decisiones de Diseño y Arquitectura

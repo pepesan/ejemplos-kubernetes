@@ -1,0 +1,46 @@
+---
+- name: Configurar el LoadBalancer L2 nativo de Cilium (LB-IPAM + L2Announcement)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear el CiliumLoadBalancerIPPool para el rango de IPs LoadBalancer
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: cilium.io/v2alpha1
+          kind: CiliumLoadBalancerIPPool
+          metadata:
+            name: demo-pool
+          spec:
+            blocks:
+              - start: "{{ cilium_lb_ip_range.split('-')[0] }}"
+                stop: "{{ cilium_lb_ip_range.split('-')[1] }}"
+
+    - name: Crear la CiliumL2AnnouncementPolicy para anunciar el pool por ARP
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: cilium.io/v2alpha1
+          kind: CiliumL2AnnouncementPolicy
+          metadata:
+            name: demo-l2-policy
+          spec:
+            loadBalancerIPs: true
+            interfaces:
+              - "{{ k8s_vip_interface }}"
+            nodeSelector: {}
+
+    - name: Mostrar resumen de la configuración del LoadBalancer de Cilium
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡LOADBALANCER L2 DE CILIUM CONFIGURADO CON ÉXITO!"
+          - "  "
+          - "  Rango de IPs LoadBalancer: {{ cilium_lb_ip_range }}"
+          - "  (anunciado por ARP/L2 en la interfaz {{ k8s_vip_interface }})"
+          - "════════════════════════════════════════════════════════════════"

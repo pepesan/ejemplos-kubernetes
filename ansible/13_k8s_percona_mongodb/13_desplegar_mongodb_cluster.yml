@@ -1,0 +1,235 @@
+---
+- name: Desplegar el clúster MongoDB con sharding (2 shards de 3 réplicas)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mongodb_release_name: mongodb-cluster
+  tasks:
+    - name: Instalar el clúster MongoDB vía el chart psmdb-db de Percona
+      kubernetes.core.helm:
+        name: "{{ mongodb_release_name }}"
+        chart_ref: percona/psmdb-db
+        chart_version: "{{ percona_psmdb_db_chart_version }}"
+        release_namespace: mongodb
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 15m0s
+        values:
+          # Igual que en el escenario 12 (chart pg-db): sin esto, el chart
+          # nombra los recursos como "<release>-psmdb-db", no "<release>" a
+          # secas, porque su helper de nombre solo usa el nombre del release
+          # tal cual si YA contiene el nombre del chart ("psmdb-db").
+          fullnameOverride: "{{ mongodb_release_name }}"
+          crVersion: "{{ percona_psmdb_chart_version }}"
+          image:
+            repository: percona/percona-server-mongodb
+            tag: "{{ mongodb_image_tag }}"
+          secrets:
+            users: "{{ mongodb_release_name }}-secrets"
+          # El cifrado en reposo viene activado por defecto en el chart y
+          # añade coste de CPU/memoria extra a cada mongod, innecesario para
+          # un laboratorio didáctico — se desactiva explícitamente. No se
+          # puede cambiar en un clúster que ya tenga datos, solo al
+          # desplegar por primera vez. (Se sospechó en un primer momento que
+          # también contribuía al problema de la variable GLIBC_TUNABLES de
+          # más abajo, pero se confirmó en pruebas reales que la causa raíz
+          # era esa y no el cifrado.)
+          mongod:
+            security:
+              enableEncryption: false
+          # GLIBC_TUNABLES=glibc.pthread.rseq=1: imprescindible en este
+          # laboratorio. Sin ella, mongod y mongos mueren con SIGSEGV
+          # (exit code 139) unos segundos después de arrancar, de forma
+          # sistemática. Causa raíz: incompatibilidad conocida entre
+          # "restartable sequences" (rseq) de glibc y kernels recientes de
+          # Linux — el kernel gestiona mal el registro de rseq que hace
+          # glibc, y cualquier proceso que lo use (mongod, compilado con
+          # glibc moderno) puede segfaultar. Confirmado en vivo probando un
+          # único replset sin sharding (mismo fallo, descartando que fuera
+          # cosa del sharding) y verificando que con esta variable el
+          # proceso deja de crashear. Ver PLAN.md para más detalle y enlaces.
+          # Anti-affinity OBLIGATORIA (no la preferente por defecto del
+          # chart) para mantener la misma política que en los escenarios
+          # 10, 11 y 12: nunca más de un Pod de BBDD por nodo de Kubernetes
+          # (lección aprendida en el escenario 12, ver PLAN.md).
+          replsets:
+            - name: rs0
+              size: "{{ mongodb_shard_size }}"
+              # El límite de memoria es imprescindible, no solo la
+              # solicitud: WiredTiger dimensiona su caché en base a la
+              # memoria detectada del cgroup, y sin un `limits.memory`
+              # explícito puede llegar a ver la memoria TOTAL del nodo en
+              # vez de la que realmente tiene asignada.
+              resources:
+                requests:
+                  cpu: 400m
+                  memory: 700M
+                limits:
+                  cpu: 600m
+                  memory: 900M
+              volumeSpec:
+                pvc:
+                  storageClassName: longhorn
+                  resources:
+                    requests:
+                      storage: "{{ mongodb_storage_size }}"
+              # antiAffinityTopologyKey por sí solo es solo PREFERENTE, no
+              # obligatorio (lección aprendida en el escenario 12: en un
+              # clúster pequeño puede acabar con varias réplicas del MISMO
+              # shard en el mismo nodo, así que si ese nodo cae se pierde el
+              # shard entero, no solo una réplica). Se usa en su lugar
+              # `affinity.advanced`, que permite anti-affinity REQUERIDA de
+              # Kubernetes, limitada a los Pods de ESTE replset en concreto
+              # (para no forzar también reparto entre shards distintos).
+              affinity:
+                advanced:
+                  podAntiAffinity:
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                      - topologyKey: kubernetes.io/hostname
+                        labelSelector:
+                          matchLabels:
+                            app.kubernetes.io/instance: "{{ mongodb_release_name }}"
+                            app.kubernetes.io/replset: rs0
+            - name: rs1
+              size: "{{ mongodb_shard_size }}"
+              resources:
+                requests:
+                  cpu: 400m
+                  memory: 700M
+                limits:
+                  cpu: 600m
+                  memory: 900M
+              volumeSpec:
+                pvc:
+                  storageClassName: longhorn
+                  resources:
+                    requests:
+                      storage: "{{ mongodb_storage_size }}"
+              affinity:
+                advanced:
+                  podAntiAffinity:
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                      - topologyKey: kubernetes.io/hostname
+                        labelSelector:
+                          matchLabels:
+                            app.kubernetes.io/instance: "{{ mongodb_release_name }}"
+                            app.kubernetes.io/replset: rs1
+          sharding:
+            enabled: true
+            configsvrReplSet:
+              size: "{{ mongodb_configsvr_size }}"
+              resources:
+                requests:
+                  cpu: 300m
+                  memory: 500M
+                limits:
+                  cpu: 500m
+                  memory: 700M
+              volumeSpec:
+                pvc:
+                  storageClassName: longhorn
+                  resources:
+                    requests:
+                      storage: "{{ mongodb_configsvr_storage_size }}"
+              affinity:
+                advanced:
+                  podAntiAffinity:
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                      - topologyKey: kubernetes.io/hostname
+                        labelSelector:
+                          matchLabels:
+                            app.kubernetes.io/instance: "{{ mongodb_release_name }}"
+                            app.kubernetes.io/replset: cfg
+            mongos:
+              size: "{{ mongodb_mongos_size }}"
+              resources:
+                requests:
+                  cpu: 300m
+                  memory: 500M
+                limits:
+                  cpu: 500m
+                  memory: 600M
+              expose:
+                type: LoadBalancer
+          # Sin backend de almacenamiento externo configurado (S3 o
+          # compatible), no tiene sentido activar backups para un
+          # laboratorio didáctico (mismo criterio que en el escenario 10).
+          # El CRD de esta versión del operador exige estos campos como
+          # arrays/objeto explícitos (no null) aunque backup esté
+          # deshabilitado.
+          backup:
+            enabled: false
+            volumeMounts: []
+            tasks: []
+            storages: {}
+
+    # El chart NO propaga el campo `env` de sus `values` hasta el CR real
+    # (comprobado en vivo: tras el install, `spec.replsets[].env` queda
+    # vacío pese a haberlo indicado en los values) — hay que parchear el CR
+    # directamente con un JSON Patch "add" después de crearlo. Al ser un
+    # campo NUEVO (no existe aún en esos objetos), "add" no toca ningún
+    # campo hermano, a diferencia de un merge patch sobre un elemento ya
+    # existente de una lista (lección aprendida en el escenario 12).
+    - name: Añadir GLIBC_TUNABLES a los shards, config servers y mongos (workaround SIGSEGV, ver PLAN.md)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb patch perconaservermongodb {{ mongodb_release_name }}
+        --type=json -p '[
+        {"op": "add", "path": "/spec/replsets/0/env", "value": [{"name": "GLIBC_TUNABLES", "value": "glibc.pthread.rseq=1"}]},
+        {"op": "add", "path": "/spec/replsets/1/env", "value": [{"name": "GLIBC_TUNABLES", "value": "glibc.pthread.rseq=1"}]},
+        {"op": "add", "path": "/spec/sharding/configsvrReplSet/env", "value": [{"name": "GLIBC_TUNABLES", "value": "glibc.pthread.rseq=1"}]},
+        {"op": "add", "path": "/spec/sharding/mongos/env", "value": [{"name": "GLIBC_TUNABLES", "value": "glibc.pthread.rseq=1"}]}
+        ]'
+      changed_when: true
+
+    - name: Esperar a que el clúster MongoDB alcance el estado "ready"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get perconaservermongodb {{ mongodb_release_name }} -o jsonpath={.status.state}
+      register: mongodb_status
+      until: mongodb_status.stdout | trim == "ready"
+      retries: 80
+      delay: 15
+      changed_when: false
+
+    - name: Esperar a que el Service LoadBalancer de mongos reciba una IP del LB-IPAM de Cilium
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get svc {{ mongodb_release_name }}-mongos
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: mongodb_lb_ip
+      until: mongodb_lb_ip.stdout | trim | length > 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Comprobar si ya existe el archivo de la contraseña del usuario MongoDB
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/mongodb_password.txt"
+      register: mongodb_password_file_status
+
+    - name: Leer la contraseña de databaseAdmin generada automáticamente por el operador
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get secret {{ mongodb_release_name }}-secrets
+        -o jsonpath={.data.MONGODB_DATABASE_ADMIN_PASSWORD}
+      register: mongodb_password_b64
+      changed_when: false
+      when: not mongodb_password_file_status.stat.exists
+
+    - name: Guardar la contraseña de databaseAdmin en un archivo local
+      ansible.builtin.copy:
+        content: "{{ mongodb_password_b64.stdout | b64decode }}"
+        dest: "{{ playbook_dir }}/mongodb_password.txt"
+        mode: "0600"
+      when: not mongodb_password_file_status.stat.exists
+
+    - name: Mostrar datos de conexión al clúster MongoDB
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡CLÚSTER MONGODB CON SHARDING DESPLEGADO CON ÉXITO!"
+          - "  "
+          - "  Usuario: databaseAdmin   Contraseña guardada de forma segura en:"
+          - "  {{ playbook_dir }}/mongodb_password.txt"
+          - "  "
+          - "  Conexión externa (IP propia asignada por el LB-IPAM de Cilium, vía mongos):"
+          - "  mongosh 'mongodb://databaseAdmin:<password>@{{ mongodb_lb_ip.stdout }}:27017/admin'"
+          - "════════════════════════════════════════════════════════════════"

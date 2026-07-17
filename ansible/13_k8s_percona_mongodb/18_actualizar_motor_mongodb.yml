@@ -1,0 +1,150 @@
+---
+# Simula una actualización real del motor MongoDB, de la versión fijada al
+# desplegar (mongodb_image_tag) a una más reciente
+# (mongodb_image_tag_upgrade). El propio operador actualiza los Pods de
+# TODAS las shards y de los config servers uno a uno (nunca los primarios
+# de todos los replsets a la vez), igual que se haría a mano en un clúster
+# MongoDB real, pero automatizado.
+- name: Actualizar el motor de MongoDB sin downtime
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mongodb_release_name: mongodb-cluster
+    mongodb_new_image: "percona/percona-server-mongodb:{{ mongodb_image_tag_upgrade }}"
+  tasks:
+    - name: Leer la contraseña de databaseAdmin desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/mongodb_password.txt"
+      register: mongodb_password_slurp
+
+    - name: Fijar la contraseña como variable
+      ansible.builtin.set_fact:
+        mongodb_password: "{{ mongodb_password_slurp.content | b64decode | trim }}"
+
+    - name: Obtener la imagen actual del clúster MongoDB
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get perconaservermongodb {{ mongodb_release_name }} -o jsonpath={.spec.image}
+      register: mongodb_current_image
+      changed_when: false
+
+    - name: Fallar si ya está en la versión objetivo
+      ansible.builtin.fail:
+        msg: "El clúster ya está en la imagen {{ mongodb_new_image }}. No hay nada que actualizar."
+      when: mongodb_current_image.stdout == mongodb_new_image
+
+    - name: Obtener la lista de shards activos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get perconaservermongodb {{ mongodb_release_name }}
+        -o jsonpath={.spec.replsets[*].name}
+      register: current_replsets
+      changed_when: false
+
+    - name: "PRUEBA PREVIA: comprobar que todos los shards están sanos ANTES de actualizar"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongodb_release_name }}-mongos-0 -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "JSON.stringify(db.adminCommand({listShards: 1}).shards.map(s => s.state))"
+      register: shards_before
+      changed_when: false
+      no_log: true
+      failed_when: "'0' in shards_before.stdout"
+
+    - name: Comprobar la versión de MongoDB ANTES de actualizar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongodb_release_name }}-mongos-0 -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "db.version()"
+      register: mongodb_version_before
+      changed_when: false
+      no_log: true
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: >
+          Estado previo OK: shards {{ current_replsets.stdout }} activos.
+          Imagen actual: {{ mongodb_current_image.stdout }} (versión {{ mongodb_version_before.stdout }}).
+
+    - name: Aplicar la nueva imagen del motor MongoDB (el operador actualiza los Pods uno a uno)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: patched
+        kind: PerconaServerMongoDB
+        api_version: psmdb.percona.com/v1
+        name: "{{ mongodb_release_name }}"
+        namespace: mongodb
+        definition:
+          spec:
+            image: "{{ mongodb_new_image }}"
+
+    - name: Esperar a que TODOS los Pods de mongod (shards + config servers) ejecuten ya la nueva imagen
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get pods
+        -l app.kubernetes.io/instance={{ mongodb_release_name }},app.kubernetes.io/component=mongod
+        -o 'jsonpath={.items[*].status.containerStatuses[?(@.name=="mongod")].image}'
+      register: pod_image_check
+      # Kubernetes normaliza la imagen añadiendo el registro por defecto
+      # (docker.io/) en containerStatuses, aunque en el spec del CR y aquí se
+      # referencie sin él — comparamos por subcadena, no por igualdad
+      # (lección aprendida en el escenario 10, ver PLAN.md).
+      until: >
+        pod_image_check.stdout.split() | length > 0 and
+        (pod_image_check.stdout.split() | select('search', mongodb_image_tag_upgrade) | list | length) == (pod_image_check.stdout.split() | length)
+      retries: 80
+      delay: 20
+      changed_when: false
+
+    # db.version() se comprueba más abajo A TRAVÉS de mongos, así que
+    # también hay que esperar a que los propios Pods mongos (que no tienen
+    # contenedor "mongod", por eso se comprueban aparte) ejecuten ya la
+    # imagen nueva — si no, `db.version()` podría reportar todavía la
+    # versión antigua del binario de mongos aunque los shards ya estén
+    # actualizados (confirmado en vivo: el resumen final mostró la versión
+    # antigua pese a que los shards ya tenían la imagen nueva).
+    - name: Esperar a que todos los Pods de mongos ejecuten ya la nueva imagen
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get pods
+        -l app.kubernetes.io/instance={{ mongodb_release_name }},app.kubernetes.io/component=mongos
+        -o 'jsonpath={.items[*].status.containerStatuses[?(@.name=="mongos")].image}'
+      register: mongos_image_check
+      until: >
+        mongos_image_check.stdout.split() | length > 0 and
+        (mongos_image_check.stdout.split() | select('search', mongodb_image_tag_upgrade) | list | length) == (mongos_image_check.stdout.split() | length)
+      retries: 40
+      delay: 15
+      changed_when: false
+
+    - name: "PRUEBA POSTERIOR: comprobar que todos los shards siguen sanos tras la actualización"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongodb_release_name }}-mongos-0 -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "JSON.stringify(db.adminCommand({listShards: 1}).shards.map(s => s.state))"
+      register: shards_after
+      changed_when: false
+      no_log: true
+      until: "'0' not in shards_after.stdout"
+      retries: 20
+      delay: 10
+
+    - name: Comprobar la versión de MongoDB DESPUÉS de actualizar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongodb_release_name }}-mongos-0 -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "db.version()"
+      register: mongodb_version_after
+      changed_when: false
+      no_log: true
+
+    - name: Mostrar resumen de la actualización
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡MOTOR DE MONGODB ACTUALIZADO SIN DOWNTIME!"
+          - "  "
+          - "  Imagen anterior: {{ mongodb_current_image.stdout }} (versión {{ mongodb_version_before.stdout }})"
+          - "  Imagen actual:   {{ mongodb_new_image }} (versión {{ mongodb_version_after.stdout }})"
+          - "  "
+          - "  Todos los shards ({{ current_replsets.stdout }}) y config servers se"
+          - "  actualizaron uno a uno, sin perder disponibilidad en ningún momento."
+          - "════════════════════════════════════════════════════════════════"

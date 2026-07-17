@@ -1,0 +1,107 @@
+---
+# Añade una shard COMPLETA nueva (rs2, 3 réplicas) al clúster MongoDB, cada
+# réplica en su propio nodo de Kubernetes dedicado (gracias a
+# 15_add_nodes.yml, que debe haber añadido los 3 nodos nuevos antes de este
+# playbook). spec.replsets es una LISTA, así que se usa un JSON Patch
+# (RFC 6902) con "add" para añadir el elemento entero al final, en vez de
+# un merge patch (lección aprendida en el escenario 12, ver PLAN.md).
+- name: Añadir una shard nueva (rs2) al clúster MongoDB
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mongodb_release_name: mongodb-cluster
+    new_shard_name: rs2
+  tasks:
+    - name: Leer la contraseña de databaseAdmin desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/mongodb_password.txt"
+      register: mongodb_password_slurp
+
+    - name: Fijar la contraseña como variable
+      ansible.builtin.set_fact:
+        mongodb_password: "{{ mongodb_password_slurp.content | b64decode | trim }}"
+
+    - name: "PRUEBA PREVIA: comprobar que los shards existentes están sanos ANTES de escalar"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongodb_release_name }}-mongos-0 -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "JSON.stringify(db.adminCommand({listShards: 1}).shards.map(s => s.state))"
+      register: shards_before
+      changed_when: false
+      no_log: true
+      failed_when: "'0' in shards_before.stdout"
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: "Estado previo OK: shards existentes activos (rs0, rs1)."
+
+    # Ojo: el campo real del CRD es "persistentVolumeClaim", NO "pvc" — "pvc"
+    # es solo el nombre abreviado que usa el values.yaml del chart Helm, que
+    # el propio chart traduce internamente al aplicar el CR. Como aquí se
+    # parchea el CR crudo (sin pasar por Helm), hay que usar el nombre real
+    # del campo — si no, kubectl avisa "unknown field" y el operador falla la
+    # reconciliación con "volume.resources.storage can't be empty".
+    - name: Añadir la nueva shard {{ new_shard_name }} al CR (JSON Patch, añade el elemento completo a la lista)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb patch perconaservermongodb {{ mongodb_release_name }}
+        --type=json -p '[{"op": "add", "path": "/spec/replsets/-", "value":
+        {"name": "{{ new_shard_name }}", "size": {{ mongodb_shard_size }},
+        "env": [{"name": "GLIBC_TUNABLES", "value": "glibc.pthread.rseq=1"}],
+        "resources": {"requests": {"cpu": "400m", "memory": "700M"}, "limits": {"cpu": "600m", "memory": "900M"}},
+        "volumeSpec": {"persistentVolumeClaim": {"storageClassName": "longhorn", "resources": {"requests": {"storage": "{{ mongodb_storage_size }}"}}}},
+        "affinity": {"advanced": {"podAntiAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": [
+        {"topologyKey": "kubernetes.io/hostname", "labelSelector": {"matchLabels": {
+        "app.kubernetes.io/instance": "{{ mongodb_release_name }}", "app.kubernetes.io/replset": "{{ new_shard_name }}"}}}]}}}}}]'
+      changed_when: true
+
+    - name: Esperar a que los 3 Pods de la nueva shard estén listos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get pods
+        -l app.kubernetes.io/instance={{ mongodb_release_name }},app.kubernetes.io/replset={{ new_shard_name }}
+        -o 'jsonpath={.items[*].status.containerStatuses[?(@.name=="mongod")].ready}'
+      register: new_shard_ready
+      until: new_shard_ready.stdout.split() | length == mongodb_shard_size | int and 'false' not in new_shard_ready.stdout.split()
+      retries: 60
+      delay: 15
+      changed_when: false
+
+    - name: Esperar a que el clúster MongoDB vuelva a reportar el estado "ready"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get perconaservermongodb {{ mongodb_release_name }} -o jsonpath={.status.state}
+      register: mongodb_status
+      until: mongodb_status.stdout | trim == "ready"
+      retries: 40
+      delay: 15
+      changed_when: false
+
+    - name: "PRUEBA POSTERIOR: comprobar que la nueva shard queda registrada y activa"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongodb_release_name }}-mongos-0 -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "JSON.stringify(db.adminCommand({listShards: 1}).shards.map(s => s._id))"
+      register: shards_after
+      changed_when: false
+      no_log: true
+      until: "'\"' + new_shard_name + '\"' in shards_after.stdout"
+      retries: 20
+      delay: 10
+
+    - name: Comprobar en qué nodos de Kubernetes han quedado programadas las réplicas de la nueva shard
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get pods
+        -l app.kubernetes.io/instance={{ mongodb_release_name }},app.kubernetes.io/replset={{ new_shard_name }}
+        -o jsonpath={.items[*].spec.nodeName}
+      register: new_shard_nodes
+      changed_when: false
+
+    - name: Mostrar resumen de la ampliación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡SHARD NUEVA ({{ new_shard_name }}) AÑADIDA CON ÉXITO!"
+          - "  "
+          - "  Shards activos ahora: rs0, rs1, {{ new_shard_name }}."
+          - "  Réplicas programadas en los nodos: {{ new_shard_nodes.stdout }}"
+          - "════════════════════════════════════════════════════════════════"

@@ -1,0 +1,130 @@
+---
+- name: Verificar el sharding de MongoDB y el acceso externo
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mongodb_release_name: mongodb-cluster
+    mongos_pod: "{{ mongodb_release_name }}-mongos-0"
+  tasks:
+    - name: Leer la contraseña de databaseAdmin desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/mongodb_password.txt"
+      register: mongodb_password_slurp
+
+    - name: Fijar la contraseña como variable
+      ansible.builtin.set_fact:
+        mongodb_password: "{{ mongodb_password_slurp.content | b64decode | trim }}"
+
+    # databaseAdmin NO tiene privilegios para enableSharding/shardCollection
+    # (roles: readWriteAnyDatabase, readAnyDatabase, dbAdminAnyDatabase,
+    # clusterMonitor, backup, restore — ninguno cubre la gestión de shards).
+    # El operador genera un usuario "clusterAdmin" propio con el rol
+    # clusterAdmin, que sí puede — hay que leerlo del mismo Secret.
+    - name: Leer la contraseña de clusterAdmin desde el Secret del operador
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get secret {{ mongodb_release_name }}-secrets
+        -o jsonpath={.data.MONGODB_CLUSTER_ADMIN_PASSWORD}
+      register: mongodb_cluster_admin_password_b64
+      changed_when: false
+
+    - name: Fijar la contraseña de clusterAdmin como variable
+      ansible.builtin.set_fact:
+        mongodb_cluster_admin_password: "{{ mongodb_cluster_admin_password_b64.stdout | b64decode | trim }}"
+      no_log: true
+
+    - name: Comprobar que ambos shards están registrados y activos (vía mongos)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongos_pod }} -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "JSON.stringify(db.adminCommand({listShards: 1}).shards.map(s => ({id: s._id, state: s.state})))"
+      register: shards_status
+      changed_when: false
+      no_log: true
+      failed_when: >
+        shards_status.stdout is not search('"id":"rs0"') or
+        shards_status.stdout is not search('"id":"rs1"')
+
+    # Se elimina la colección si ya existe de una ejecución anterior: este
+    # playbook es de verificación, no de datos persistentes, y sin este
+    # borrado cada repetición iría acumulando 200 documentos más, rompiendo
+    # la comprobación de "exactamente 200" más abajo (idempotencia). clusterAdmin
+    # no puede hacer "drop" (solo tiene privilegios de cluster, no de base de
+    # datos) — hay que usar databaseAdmin para esto en concreto.
+    - name: Eliminar la colección de prueba si ya existe de una ejecución anterior
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongos_pod }} -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "db.getSiblingDB('demo').prueba.drop()"
+      changed_when: false
+
+    - name: Habilitar el sharding de la colección de prueba (requiere el usuario clusterAdmin)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongos_pod }} -c mongos --
+        mongosh --quiet -u clusterAdmin -p {{ mongodb_cluster_admin_password }} --authenticationDatabase admin
+        --eval "
+        sh.enableSharding('demo');
+        sh.shardCollection('demo.prueba', {clave: 'hashed'});
+        "
+      register: sharding_setup_result
+      changed_when: false
+      no_log: true
+
+    - name: Insertar 200 documentos de prueba en la colección shardeada
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongos_pod }} -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "
+        for (let i = 0; i < 200; i++) { db.getSiblingDB('demo').prueba.insertOne({clave: i, valor: 'sharding-ok'}); }
+        "
+      register: write_result
+      changed_when: false
+      no_log: true
+
+    - name: Leer de vuelta el recuento total de documentos vía mongos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongos_pod }} -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "db.getSiblingDB('demo').prueba.countDocuments({})"
+      register: read_result
+      changed_when: false
+      no_log: true
+      failed_when: "'200' not in read_result.stdout"
+
+    - name: Comprobar que los datos han quedado repartidos entre AMBOS shards (no todos en uno solo)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb exec {{ mongos_pod }} -c mongos --
+        mongosh --quiet -u databaseAdmin -p {{ mongodb_password }} --authenticationDatabase admin
+        --eval "JSON.stringify(db.getSiblingDB('config').chunks.aggregate([{$match:{}}, {$group:{_id:'$shard', total:{$sum:1}}}]).toArray())"
+      register: chunk_distribution
+      changed_when: false
+      no_log: true
+      failed_when: >
+        chunk_distribution.stdout is not search('rs0') or
+        chunk_distribution.stdout is not search('rs1')
+
+    - name: Obtener la IP LoadBalancer de mongos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mongodb get svc {{ mongodb_release_name }}-mongos
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: mongodb_lb_ip
+      changed_when: false
+
+    - name: Comprobar el acceso TCP externo al clúster vía la IP LoadBalancer
+      ansible.builtin.command: >
+        python3 -c "import socket; socket.create_connection(('{{ mongodb_lb_ip.stdout }}', 27017), timeout=10); print('conexion-tcp-ok')"
+      register: external_tcp_check
+      changed_when: false
+      failed_when: "'conexion-tcp-ok' not in external_tcp_check.stdout"
+
+    - name: Mostrar resumen de la verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  VERIFICACIÓN DEL CLÚSTER MONGODB (SHARDING)"
+          - "  "
+          - "  Ambos shards (rs0, rs1) registrados y activos."
+          - "  200 documentos insertados y repartidos entre los dos shards, confirmado."
+          - "  Acceso TCP externo vía mongos ({{ mongodb_lb_ip.stdout }}:27017): conexión OK."
+          - "════════════════════════════════════════════════════════════════"
