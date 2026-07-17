@@ -1,0 +1,48 @@
+---
+# Conexión SSH: acceso como root sin contraseña (clave inyectada en la imagen base)
+ansible_user: root
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+# Parámetros de los nodos virtuales LXD (La plantilla 'k8s-template' debe estar basada en Ubuntu 26.04)
+lxd_image: k8s-template
+lxd_network: lxdbr0
+
+# Módulos de kernel necesarios para Kubernetes/CNI en LXD
+lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
+
+# Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
+k8s_major_version: "v1.36"
+k8s_pod_network_cidr: "10.244.0.0/16" # CIDR de pods, gestionado por Cilium (modo cluster-pool)
+
+# VIP de alta disponibilidad del plano de control (kube-vip) — igual que en el 02
+k8s_vip_address: "10.207.154.49"
+k8s_vip_port: 6443
+k8s_vip_interface: enp5s0
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+
+# Cilium sustituye a Flannel como CNI (igual que en el escenario 08) y provee
+# su LoadBalancer L2 nativo (LB-IPAM + L2Announcement) para exponer la BBDD
+# con un Service tipo LoadBalancer normal, sin Gateway API ni MetalLB.
+cilium_version: "1.19.5"
+cilium_lb_ip_range: "10.207.154.70-10.207.154.80"
+
+# Versión de los charts de mariadb-operator (mariadb-operator-crds y
+# mariadb-operator van siempre parejos, misma versión que el propio operador)
+mariadb_operator_chart_version: "26.6.0"
+
+# Versión de la imagen oficial de MariaDB (motor de BBDD con Galera
+# integrado de serie desde la 10.1), independiente de la versión del
+# operador de arriba. Se fija deliberadamente una versión algo antigua (no
+# la última disponible) para poder simular una actualización real con
+# 18_actualizar_motor_mariadb.yml.
+mariadb_image_tag: "11.8.3"
+mariadb_image_tag_upgrade: "11.8.8"
+
+# Tamaño del clúster Galera de MariaDB
+mariadb_cluster_size: 3
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"
+
+# Versión del chart de Longhorn
+longhorn_chart_version: "1.12.0"

@@ -1,0 +1,73 @@
+---
+- name: Desplegar el mariadb-operator (MariaDB Galera)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear namespace mariadb si no existe
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: mariadb
+
+    - name: Agregar el repositorio de mariadb-operator a Helm
+      kubernetes.core.helm_repository:
+        name: mariadb-operator
+        repo_url: https://mariadb-operator.github.io/mariadb-operator
+
+    - name: Instalar las CRDs de mariadb-operator vía Helm
+      kubernetes.core.helm:
+        name: mariadb-operator-crds
+        chart_ref: mariadb-operator/mariadb-operator-crds
+        chart_version: "{{ mariadb_operator_chart_version }}"
+        release_namespace: mariadb
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 5m0s
+
+    - name: Instalar el mariadb-operator vía Helm
+      kubernetes.core.helm:
+        name: mariadb-operator
+        chart_ref: mariadb-operator/mariadb-operator
+        chart_version: "{{ mariadb_operator_chart_version }}"
+        release_namespace: mariadb
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 5m0s
+
+    - name: Esperar a que el mariadb-operator esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb rollout status deployment/mariadb-operator --timeout=180s
+      changed_when: false
+
+    # El webhook de validación (usado por el CRD MariaDB) vive en un
+    # Deployment aparte del controlador principal, y tarda unos segundos más
+    # en quedar listo (necesita que mariadb-operator-cert-controller monte
+    # antes los Secrets con el certificado TLS). Si se crea el recurso
+    # MariaDB antes de que este webhook esté listo, la llamada falla con
+    # "no route to host" al intentar validar contra su Service.
+    - name: Esperar a que el webhook de validación de mariadb-operator esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb rollout status deployment/mariadb-operator-webhook --timeout=180s
+      changed_when: false
+
+    - name: Esperar a que el Service del webhook tenga endpoints activos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get endpoints mariadb-operator-webhook
+        -o jsonpath={.subsets[0].addresses[0].ip}
+      register: webhook_endpoint_check
+      until: webhook_endpoint_check.stdout | trim | length > 0
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: Mostrar resumen del despliegue del operador
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡MARIADB-OPERATOR DESPLEGADO CON ÉXITO!"
+          - "════════════════════════════════════════════════════════════════"

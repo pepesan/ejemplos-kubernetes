@@ -1,0 +1,43 @@
+---
+- name: Desplegar el Percona Operator for MySQL (PXC/Galera)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Crear namespace pxc si no existe
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: pxc
+
+    - name: Agregar el repositorio de Percona a Helm
+      kubernetes.core.helm_repository:
+        name: percona
+        repo_url: https://percona.github.io/percona-helm-charts/
+
+    - name: Instalar el Percona Operator for MySQL (pxc-operator) vía Helm
+      kubernetes.core.helm:
+        name: pxc-operator
+        chart_ref: percona/pxc-operator
+        chart_version: "{{ percona_pxc_chart_version }}"
+        release_namespace: pxc
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 5m0s
+
+    - name: Esperar a que el operador de Percona esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc rollout status deployment/pxc-operator --timeout=180s
+      changed_when: false
+
+    - name: Mostrar resumen del despliegue del operador
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡PERCONA OPERATOR FOR MYSQL (PXC) DESPLEGADO CON ÉXITO!"
+          - "════════════════════════════════════════════════════════════════"

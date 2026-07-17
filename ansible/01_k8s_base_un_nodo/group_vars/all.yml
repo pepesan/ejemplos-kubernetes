@@ -13,3 +13,6 @@ lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,ip
 # Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
 k8s_major_version: "v1.36"
 k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"

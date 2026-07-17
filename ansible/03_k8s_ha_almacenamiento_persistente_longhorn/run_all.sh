@@ -38,9 +38,9 @@ run_playbook 05 05_instalar_k8s_tools.yml         "Instalar kubeadm, kubelet y k
 run_playbook 06 06_inicializar_primer_manager.yml "Inicializar el primer manager (kube-vip + kubeadm init HA)"
 run_playbook 07 07_unir_managers.yml              "Unir los managers adicionales al plano de control HA"
 run_playbook 08 08_unir_workers.yml               "Unir los nodos workers al clúster (vía el VIP)"
-run_playbook 09 09_desplegar_longhorn.yml         "Desplegar Longhorn Engine y Dashboard en Kubernetes"
-run_playbook 10 10_verificar_persistencia_rwx.yml "Desplegar PVC y Pods de prueba para verificar persistencia RWX"
-run_playbook 11 11_desplegar_headlamp.yml         "Desplegar Headlamp Dashboard y configurar token"
+run_playbook 09 09_desplegar_headlamp.yml         "Desplegar Headlamp Dashboard y configurar token (pronto, para seguir el resto desde la consola web)"
+run_playbook 10 10_desplegar_longhorn.yml         "Desplegar Longhorn Engine y Dashboard en Kubernetes"
+run_playbook 11 11_verificar_persistencia_rwx.yml "Desplegar PVC y Pods de prueba para verificar persistencia RWX"
 
 host_ip() { awk -v h="$1" '$1==h { for (i=1;i<=NF;i++) if ($i ~ /^ansible_host=/) print substr($i, index($i, "=")+1) }' inventory.ini; }
 VIP=$(awk -F': ' '/^k8s_vip_address:/ { gsub(/"/,"",$2); print $2 }' group_vars/all.yml)

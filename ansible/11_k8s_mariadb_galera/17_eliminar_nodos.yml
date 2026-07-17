@@ -1,0 +1,314 @@
+---
+# Quita DOS réplicas del clúster MariaDB (Galera) — el operador exige un
+# tamaño IMPAR, así que solo se puede reducir de 5 en 5-2=3, nunca -1 (ver
+# PLAN.md) — Y los dos nodos de Kubernetes que las alojaban, en ese orden:
+# primero se reduce spec.replicas para que el propio operador expulse las
+# réplicas de Galera de forma ordenada (StatefulSet elimina siempre los Pods
+# de mayor ordinal), y solo cuando esas réplicas han desaparecido del todo se
+# destruyen las VMs que las alojaban.
+#
+# Idempotente incluso si una ejecución anterior quedó a medias: si el
+# clúster MariaDB ya está en el tamaño mínimo, se salta el escalado y va
+# directo a terminar de limpiar los nodos de Kubernetes indicados.
+- name: Quitar dos réplicas de MariaDB y sus nodos de Kubernetes dedicados
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mariadb_release_name: mariadb-galera
+    mariadb_min_size: 3
+  tasks:
+    - name: Validar que se han especificado los dos nodos a eliminar
+      ansible.builtin.fail:
+        msg: "Por favor, especifica los dos nodos a eliminar usando: -e 'node_name=k8s-worker4 node_name2=k8s-worker5'"
+      when: node_name is not defined or node_name2 is not defined
+
+    - name: Leer la contraseña root de MariaDB desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/mariadb_root_password.txt"
+      register: mariadb_root_password_slurp
+
+    - name: Fijar la contraseña root como variable
+      ansible.builtin.set_fact:
+        mariadb_root_password: "{{ mariadb_root_password_slurp.content | b64decode | trim }}"
+
+    - name: Obtener el tamaño actual del clúster MariaDB
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get mariadb {{ mariadb_release_name }} -o jsonpath={.spec.replicas}
+      register: mariadb_current_size
+      changed_when: false
+
+    - name: Fijar si el clúster MariaDB ya está en el tamaño mínimo (escalado ya hecho en una ejecución anterior)
+      ansible.builtin.set_fact:
+        mariadb_ya_reducido: "{{ mariadb_current_size.stdout | int <= mariadb_min_size }}"
+
+    - name: "PRUEBA PREVIA: comprobar que el clúster Galera está sano ANTES de reducirlo (wsrep_cluster_size)"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+      register: wsrep_size_before
+      changed_when: false
+      no_log: true
+      failed_when: wsrep_size_before.stdout.split()[1] | default('0') | int != mariadb_current_size.stdout | int
+      when: not mariadb_ya_reducido
+
+    - name: "PRUEBA PREVIA: comprobar que todos los nodos Galera están 'Synced' ANTES de reducirlo"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_state_before
+      changed_when: false
+      no_log: true
+      failed_when: "'Synced' not in wsrep_state_before.stdout"
+      when: not mariadb_ya_reducido
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: "Estado previo OK: {{ mariadb_current_size.stdout }} réplicas, todas 'Synced' en Galera."
+      when: not mariadb_ya_reducido
+
+    - name: Calcular el nuevo tamaño (dos réplicas menos, para mantenerlo impar)
+      ansible.builtin.set_fact:
+        mariadb_new_size: "{{ mariadb_current_size.stdout | int - 2 if not mariadb_ya_reducido else mariadb_current_size.stdout | int }}"
+
+    - name: Comprobar en qué nodos están programados los Pods que van a salir
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get pod {{ mariadb_release_name }}-{{ item }}
+        -o jsonpath={.spec.nodeName}
+      register: outgoing_pods_node
+      changed_when: false
+      failed_when: false
+      loop:
+        - "{{ mariadb_current_size.stdout | int - 1 }}"
+        - "{{ mariadb_current_size.stdout | int - 2 }}"
+      when: not mariadb_ya_reducido
+
+    - name: Avisar si los Pods salientes no están en los nodos indicados
+      ansible.builtin.debug:
+        msg: >
+          AVISO: los Pods que el operador va a expulsar están en los nodos
+          {{ outgoing_pods_node.results | map(attribute='stdout') | join(', ') }},
+          no coinciden exactamente con {{ node_name }}/{{ node_name2 }}. Continúa
+          igualmente, pero comprueba que ambos nodos se quedan sin ninguna
+          réplica de MariaDB antes de eliminarlos.
+      when:
+        - not mariadb_ya_reducido
+        - (outgoing_pods_node.results | map(attribute='stdout') | sort | list) != ([node_name, node_name2] | sort | list)
+
+    - name: Reducir el clúster MariaDB a {{ mariadb_new_size }} réplicas
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: patched
+        kind: MariaDB
+        api_version: k8s.mariadb.com/v1alpha1
+        name: "{{ mariadb_release_name }}"
+        namespace: mariadb
+        definition:
+          spec:
+            replicas: "{{ mariadb_new_size | int }}"
+      when: not mariadb_ya_reducido
+
+    - name: Esperar a que el StatefulSet quede con {{ mariadb_new_size }} réplicas
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get statefulset {{ mariadb_release_name }}
+        -o jsonpath={.status.readyReplicas}
+      register: mariadb_ready_replicas
+      until: mariadb_ready_replicas.stdout | trim == mariadb_new_size | string
+      retries: 40
+      delay: 15
+      changed_when: false
+      when: not mariadb_ya_reducido
+
+    - name: Comprobar el tamaño del clúster Galera reportado por MariaDB (wsrep_cluster_size)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+      register: wsrep_cluster_size
+      changed_when: false
+      no_log: true
+      until: wsrep_cluster_size.stdout.split()[1] | default('0') | int == mariadb_new_size | int
+      retries: 20
+      delay: 10
+      when: not mariadb_ya_reducido
+
+    - name: "PRUEBA POSTERIOR: comprobar que las réplicas restantes quedan 'Synced' tras la reducción"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_state_after
+      changed_when: false
+      no_log: true
+      until: "'Synced' in wsrep_state_after.stdout"
+      retries: 20
+      delay: 10
+      when: not mariadb_ya_reducido
+
+    # El StatefulSet no borra los PVC de los ordinales que salen al reducir
+    # su tamaño (comportamiento por defecto de Kubernetes). Esos volúmenes
+    # ya no los usa nadie, pero mientras existan, Longhorn mantiene vivo el
+    # Pod "instance-manager" en el nodo donde tengan réplica — y ese Pod no
+    # es un DaemonSet real, así que bloquea indefinidamente el `drain` de
+    # más abajo. Se borran explícitamente antes de tocar los nodos.
+    #
+    # IMPORTANTE: los ordinales salientes solo se pueden calcular a partir de
+    # mariadb_current_size cuando la reducción se hace EN ESTA MISMA
+    # ejecución. Si mariadb_ya_reducido es true, mariadb_current_size ya es
+    # el tamaño final (más pequeño) de una ejecución anterior, y restarle 1/2
+    # apuntaría a réplicas ACTIVAS, no a las huérfanas ya limpiadas en aquella
+    # ejecución previa — de ahí el "when" explícito (lección aprendida en el
+    # escenario 10, ver PLAN.md).
+    #
+    # mariadb-operator aprovisiona DOS PVC por réplica, no uno: "storage-"
+    # (datos) y "galera-" (config de Galera). Si solo se borra el primero,
+    # el segundo mantiene viva una réplica real de Longhorn en el nodo
+    # saliente y el `drain` de más abajo se cuelga indefinidamente (mismo
+    # síntoma que el bug del escenario 10, causa distinta — descubierto en
+    # vivo en este laboratorio, ver PLAN.md).
+    - name: Eliminar los PVC huérfanos (datos y config de Galera) de las réplicas de MariaDB ya retiradas
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: absent
+        kind: PersistentVolumeClaim
+        name: "{{ item.1 }}-{{ mariadb_release_name }}-{{ item.0 }}"
+        namespace: mariadb
+      loop: "{{ [mariadb_current_size.stdout | int - 1, mariadb_current_size.stdout | int - 2] | product(['storage', 'galera']) | list }}"
+      when: not mariadb_ya_reducido
+
+    - name: Comprobar si los nodos existen en el clúster, drenarlos y eliminarlos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get node {{ item }}
+      register: node_check
+      failed_when: false
+      changed_when: false
+      loop:
+        - "{{ node_name }}"
+        - "{{ node_name2 }}"
+
+    # Este laboratorio es hiperconvergente: estos nodos también alojan
+    # réplicas de Longhorn, no solo Pods de MariaDB. El Pod "instance-manager"
+    # de Longhorn NO es un DaemonSet real (es un recurso "InstanceManager"
+    # propio de Longhorn) y tiene su propio PodDisruptionBudget con 0
+    # disrupciones permitidas mientras gestione algún volumen — por eso
+    # `kubectl drain --ignore-daemonsets` se queda colgado indefinidamente
+    # si no se desaloja Longhorn de ese nodo ANTES de drenarlo (mismo bug ya
+    # corregido en los escenarios 03 y 10).
+    - name: Desactivar la programación de réplicas de Longhorn en los nodos salientes
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} patch -n longhorn-system nodes.longhorn.io {{ item.item }}
+        --type merge -p '{"spec":{"allowScheduling":false}}'
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Esperar a que Longhorn deje de asignar réplicas reales a esos nodos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get replicas.longhorn.io -n longhorn-system
+        -o 'jsonpath={.items[?(@.spec.nodeID=="{{ item.item }}")].metadata.name}'
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      register: real_replicas_check
+      until: real_replicas_check.stdout | trim == ""
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # El propio Pod "instance-manager" de Longhorn no desaparece solo aunque
+    # ya no gestione ninguna réplica real (solo se limpia cuando el nodo se
+    # marca "down", algo que aún no ha pasado). Con el paso anterior ya
+    # confirmado (cero réplicas reales en el nodo), es seguro borrarlo de
+    # forma directa: un `kubectl delete pod` normal (a diferencia de un
+    # drain/eviction) NO respeta el PodDisruptionBudget, así que no se queda
+    # colgado como el `drain` de más abajo se quedaría si lo dejáramos vivo.
+    - name: Eliminar directamente el Pod instance-manager ya vacío de esos nodos
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} delete pods -n longhorn-system
+        --field-selector spec.nodeName={{ item.item }} -l longhorn.io/component=instance-manager
+        --ignore-not-found --now
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      changed_when: true
+
+    - name: Drenar los nodos de Kubernetes de forma segura (evacuar el resto de Pods)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} drain {{ item.item }}
+        --delete-emptydir-data --ignore-daemonsets --force
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Restablecer configuración de kubeadm en los nodos a eliminar si están accesibles
+      ansible.builtin.command: >
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/.ssh/id_ed25519 root@{{ item.item }} "kubeadm reset -f"
+      loop: "{{ node_check.results }}"
+      register: kubeadm_reset_out
+      failed_when: false
+      changed_when: false
+      when: item.rc == 0
+
+    - name: Eliminar los nodos del clúster de Kubernetes
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} delete node {{ item.item }}
+      loop: "{{ node_check.results }}"
+      when: item.rc == 0
+      failed_when: false
+      changed_when: true
+
+    - name: Comprobar si las VMs de LXD existen
+      ansible.builtin.command: >
+        lxc info {{ item }}
+      register: lxc_check
+      failed_when: false
+      changed_when: false
+      loop:
+        - "{{ node_name }}"
+        - "{{ node_name2 }}"
+
+    - name: Detener y eliminar las máquinas virtuales LXD de los nodos
+      community.general.lxd_container:
+        name: "{{ item.item }}"
+        state: absent
+        force_stop: true
+        timeout: 30
+      loop: "{{ lxc_check.results }}"
+      when: item.rc == 0
+
+    # mariadb-operator tiene su propia recuperación automática de Galera
+    # (logger "galera.recovery" en sus logs): tras eliminar réplicas y sus
+    # nodos, el clúster puede quedar temporalmente en un estado "NON_PRIM"
+    # (Galera no encuentra quórum porque su vista persistida aún recuerda
+    # los miembros ya retirados) y el propio operador lo detecta y reinicia
+    # los Pods hasta recomponer un componente primario válido — un proceso
+    # que puede tardar varios minutos, a diferencia de Percona (escenario
+    # 10), donde la reconfiguración es prácticamente inmediata durante la
+    # propia reducción. Se espera aquí explícitamente a que ese proceso
+    # termine, para no declarar éxito con el clúster aún recuperándose.
+    - name: Esperar a que el clúster Galera esté sano tras la reconciliación del operador
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_final_check
+      changed_when: false
+      no_log: true
+      until: "'Synced' in wsrep_final_check.stdout"
+      retries: 40
+      delay: 15
+
+    - name: Mostrar resumen de la eliminación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡DOS RÉPLICAS Y SUS NODOS ELIMINADOS CON ÉXITO!"
+          - "  "
+          - "  Tamaño anterior de MariaDB: {{ mariadb_current_size.stdout }}   Tamaño actual: {{ mariadb_new_size }}"
+          - "  Confirmado también por Galera (wsrep_cluster_size = {{ mariadb_new_size }})."
+          - "  Nodos '{{ node_name }}' y '{{ node_name2 }}' drenados, eliminados de"
+          - "  Kubernetes y sus VMs destruidas."
+          - "════════════════════════════════════════════════════════════════"

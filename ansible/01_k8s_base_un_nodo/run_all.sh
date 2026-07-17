@@ -36,9 +36,9 @@ run_playbook 03 03_configurar_os.yml       "Configurar módulos de kernel y sysc
 run_playbook 04 04_instalar_containerd.yml "Instalar y configurar containerd (CRI) con systemd driver"
 run_playbook 05 05_instalar_k8s_tools.yml  "Instalar kubeadm, kubelet y kubectl (hold de versiones)"
 run_playbook 06 06_inicializar_cluster.yml "Inicializar clúster, instalar Flannel y quitar Taint"
-run_playbook 07 07_desplegar_nginx.yml      "Desplegar un contenedor Nginx y verificar NodePort"
-run_playbook 08 08_despliegue_helm.yml      "Realizar un despliegue de Helm con Apache y verificar"
-run_playbook 09 09_desplegar_headlamp.yml    "Desplegar Headlamp Dashboard y configurar acceso"
+run_playbook 07 07_desplegar_headlamp.yml   "Desplegar Headlamp Dashboard y configurar acceso (pronto, para seguir el resto desde la consola web)"
+run_playbook 08 08_desplegar_nginx.yml      "Desplegar un contenedor Nginx y verificar NodePort"
+run_playbook 09 09_despliegue_helm.yml      "Realizar un despliegue de Helm con Apache y verificar"
 
 NODE_IP=$(awk '/^k8s-single/ { for (i=1;i<=NF;i++) if ($i ~ /^ansible_host=/) print substr($i, index($i, "=")+1) }' inventory.ini)
 

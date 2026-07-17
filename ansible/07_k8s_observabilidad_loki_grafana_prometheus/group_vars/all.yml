@@ -23,3 +23,14 @@ kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
 
 # Tamaño de los volúmenes persistentes de Prometheus/Grafana/Loki (backend Longhorn)
 observability_storage_size: "5Gi"
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"
+
+# Versión del chart de Longhorn
+longhorn_chart_version: "1.12.0"
+
+# Versiones de los charts del stack de observabilidad
+kube_prometheus_stack_chart_version: "87.16.1"
+loki_chart_version: "7.1.0"
+promtail_chart_version: "6.17.1"

@@ -1,0 +1,93 @@
+---
+- name: Desplegar el clúster MariaDB (Galera)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mariadb_release_name: mariadb-galera
+  tasks:
+    - name: Crear el recurso MariaDB con Galera habilitado
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: k8s.mariadb.com/v1alpha1
+          kind: MariaDB
+          metadata:
+            name: "{{ mariadb_release_name }}"
+            namespace: mariadb
+          spec:
+            image: "mariadb:{{ mariadb_image_tag }}"
+            rootPasswordSecretKeyRef:
+              name: "{{ mariadb_release_name }}-root-password"
+              key: password
+              generate: true
+            replicas: "{{ mariadb_cluster_size }}"
+            galera:
+              enabled: true
+            storage:
+              size: 3Gi
+              storageClassName: longhorn
+            resources:
+              requests:
+                cpu: 400m
+                memory: 700M
+            service:
+              type: LoadBalancer
+            primaryService:
+              type: LoadBalancer
+
+    - name: Esperar a que el clúster MariaDB alcance el estado "Ready"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get mariadb {{ mariadb_release_name }}
+        -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}'
+      register: mariadb_status
+      until: mariadb_status.stdout | trim == "True"
+      retries: 60
+      delay: 15
+      changed_when: false
+
+    - name: Esperar a que el Service LoadBalancer primario reciba una IP del LB-IPAM de Cilium
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get svc {{ mariadb_release_name }}-primary
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: mariadb_lb_ip
+      until: mariadb_lb_ip.stdout | trim | length > 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Comprobar si ya existe el archivo de la contraseña root de MariaDB
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/mariadb_root_password.txt"
+      register: mariadb_password_file_status
+
+    - name: Leer la contraseña root generada automáticamente por el operador
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get secret {{ mariadb_release_name }}-root-password
+        -o jsonpath={.data.password}
+      register: mariadb_root_password_b64
+      changed_when: false
+      when: not mariadb_password_file_status.stat.exists
+
+    - name: Guardar la contraseña root de MariaDB en un archivo local
+      ansible.builtin.copy:
+        content: "{{ mariadb_root_password_b64.stdout | b64decode }}"
+        dest: "{{ playbook_dir }}/mariadb_root_password.txt"
+        mode: "0600"
+      when: not mariadb_password_file_status.stat.exists
+
+    - name: Mostrar datos de conexión al clúster MariaDB
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡CLÚSTER MARIADB (GALERA) DESPLEGADO CON ÉXITO!"
+          - "  "
+          - "  Usuario: root   /   Contraseña guardada de forma segura en:"
+          - "  {{ playbook_dir }}/mariadb_root_password.txt"
+          - "  "
+          - "  Conexión interna (desde dentro del clúster, escritura): {{ mariadb_release_name }}-primary.mariadb.svc:3306"
+          - "  Conexión externa (IP propia asignada por el LB-IPAM de Cilium):"
+          - "  mysql -h {{ mariadb_lb_ip.stdout }} -u root -p"
+          - "════════════════════════════════════════════════════════════════"

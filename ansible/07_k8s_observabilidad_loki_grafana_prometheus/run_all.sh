@@ -38,11 +38,11 @@ run_playbook 05 05_instalar_k8s_tools.yml              "Instalar kubeadm, kubele
 run_playbook 06 06_inicializar_primer_manager.yml      "Inicializar el primer manager (kube-vip + kubeadm init HA)"
 run_playbook 07 07_unir_managers.yml                   "Unir los managers adicionales al plano de control HA"
 run_playbook 08 08_unir_workers.yml                    "Unir los nodos workers al clúster (vía el VIP)"
-run_playbook 09 09_desplegar_longhorn.yml              "Desplegar Longhorn (backend de almacenamiento persistente)"
-run_playbook 10 10_desplegar_prometheus_grafana.yml    "Desplegar Prometheus Operator y Grafana"
-run_playbook 11 11_desplegar_loki.yml                  "Desplegar Loki y Promtail (logs centralizados)"
-run_playbook 12 12_verificar_observabilidad.yml        "Verificar métricas, dashboards y logs"
-run_playbook 13 13_desplegar_headlamp.yml              "Desplegar Headlamp Dashboard y configurar token"
+run_playbook 09 09_desplegar_headlamp.yml              "Desplegar Headlamp Dashboard y configurar token (pronto, para seguir el resto desde la consola web)"
+run_playbook 10 10_desplegar_longhorn.yml              "Desplegar Longhorn (backend de almacenamiento persistente)"
+run_playbook 11 11_desplegar_prometheus_grafana.yml    "Desplegar Prometheus Operator y Grafana"
+run_playbook 12 12_desplegar_loki.yml                  "Desplegar Loki y Promtail (logs centralizados)"
+run_playbook 13 13_verificar_observabilidad.yml        "Verificar métricas, dashboards y logs"
 
 host_ip() { awk -v h="$1" '$1==h { for (i=1;i<=NF;i++) if ($i ~ /^ansible_host=/) print substr($i, index($i, "=")+1) }' inventory.ini; }
 VIP=$(awk -F': ' '/^k8s_vip_address:/ { gsub(/"/,"",$2); print $2 }' group_vars/all.yml)

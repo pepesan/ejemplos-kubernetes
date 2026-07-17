@@ -7,11 +7,11 @@ Este laboratorio despliega un clúster de Kubernetes HA de **6 nodos** (idéntic
 *   **`ansible.cfg`** / **`inventory.ini`** / **`group_vars/all.yml`**: configuración del entorno, incluyendo el rango de IPs reservado para MetalLB (`metallb_ip_range`) y el dominio local de pruebas (`ingress_base_domain`).
 *   **`../check_requisitos.yml`**: validación unificada de requisitos del host (LXD, red, imagen base).
 *   **`02_crear_nodos.yml`** a **`08_unir_workers.yml`**: reutilizan (`import_playbook`) los playbooks del escenario 02 para crear las 6 VMs y formar el clúster HA.
-*   **`09_desplegar_metallb.yml`**: instala MetalLB vía Helm y configura un `IPAddressPool` + `L2Advertisement` para anunciar el rango de IPs por ARP en la red de LXD.
-*   **`10_desplegar_ingress_nginx.yml`**: instala el NGINX Ingress Controller vía Helm con `service.type=LoadBalancer`, y espera a que MetalLB le asigne una IP externa.
-*   **`11_desplegar_apps_demo.yml`**: despliega dos microservicios de prueba (`app-a`, `app-b`), cada uno con su propio `ConfigMap`, `Secret` e `initContainer` (que espera a que el DNS del clúster esté listo antes de arrancar el contenedor principal), consolidados detrás de un único `Ingress` que enruta por nombre de host.
-*   **`12_verificar_ingress.yml`**: comprueba que cada host (`app-a.k8s.local`, `app-b.k8s.local`) devuelve el contenido correspondiente a su propio microservicio.
-*   **`13_desplegar_headlamp.yml`**: despliega Headlamp Dashboard (NodePort, igual que en el resto de laboratorios).
+*   **`09_desplegar_headlamp.yml`**: despliega Headlamp Dashboard (NodePort, igual que en el resto de laboratorios) justo después de formar el clúster, para poder seguir el resto de despliegues desde su consola web.
+*   **`10_desplegar_metallb.yml`**: instala MetalLB vía Helm y configura un `IPAddressPool` + `L2Advertisement` para anunciar el rango de IPs por ARP en la red de LXD.
+*   **`11_desplegar_ingress_nginx.yml`**: instala el NGINX Ingress Controller vía Helm con `service.type=LoadBalancer`, y espera a que MetalLB le asigne una IP externa.
+*   **`12_desplegar_apps_demo.yml`**: despliega dos microservicios de prueba (`app-a`, `app-b`), cada uno con su propio `ConfigMap`, `Secret` e `initContainer` (que espera a que el DNS del clúster esté listo antes de arrancar el contenedor principal), consolidados detrás de un único `Ingress` que enruta por nombre de host.
+*   **`13_verificar_ingress.yml`**: comprueba que cada host (`app-a.k8s.local`, `app-b.k8s.local`) devuelve el contenido correspondiente a su propio microservicio.
 *   **`14_add_node.yml`** / **`15_eliminar_nodo.yml`**: escalado de nodos worker (ver más abajo).
 *   **`20_destroy.yml`**: destrucción completa del entorno.
 

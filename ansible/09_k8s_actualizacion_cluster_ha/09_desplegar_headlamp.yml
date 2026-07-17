@@ -16,6 +16,7 @@
       kubernetes.core.helm:
         name: headlamp
         chart_ref: headlamp/headlamp
+        chart_version: "{{ headlamp_chart_version }}"
         release_namespace: headlamp
         create_namespace: true
         kubeconfig: "{{ kubeconfig_path }}"

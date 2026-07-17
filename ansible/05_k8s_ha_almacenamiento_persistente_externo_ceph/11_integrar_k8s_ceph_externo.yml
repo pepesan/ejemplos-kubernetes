@@ -1,0 +1,152 @@
+---
+- name: Obtener credenciales y datos del Clúster Ceph Externo
+  hosts: ceph_monitors
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Crear el pool RBD para los volúmenes de Kubernetes
+      ansible.builtin.command: ceph osd pool create rbd-k8s
+      register: rbd_pool_create
+      failed_when:
+        - rbd_pool_create.rc != 0
+        - "'already exists' not in rbd_pool_create.stderr"
+      changed_when: "'created pool' in rbd_pool_create.stdout"
+
+    - name: Inicializar el pool como pool de aplicación RBD
+      ansible.builtin.command: rbd pool init rbd-k8s
+      changed_when: false
+
+    - name: Obtener FSID del clúster Ceph
+      ansible.builtin.command: ceph fsid
+      register: ceph_fsid_raw
+      changed_when: false
+
+    - name: Obtener clave de client.admin
+      ansible.builtin.command: ceph auth get-key client.admin
+      register: ceph_admin_key_raw
+      changed_when: false
+
+    - name: Registrar variables en el monitor
+      ansible.builtin.set_fact:
+        ceph_fsid: "{{ ceph_fsid_raw.stdout | trim }}"
+        ceph_admin_key: "{{ ceph_admin_key_raw.stdout | trim }}"
+
+- name: Integrar Ceph Externo en Kubernetes con Ceph CSI Drivers
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    ceph_mon_ip: "{{ hostvars[groups['ceph_monitors'][0]]['ansible_host'] }}"
+    ceph_fsid: "{{ hostvars[groups['ceph_monitors'][0]]['ceph_fsid'] }}"
+    ceph_admin_key: "{{ hostvars[groups['ceph_monitors'][0]]['ceph_admin_key'] }}"
+  tasks:
+    - name: Crear namespace de almacenamiento ceph-csi
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: ceph-csi
+
+    - name: Crear secreto de conexión de Ceph (csi-ceph-secret) en ceph-csi
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: csi-ceph-secret
+            namespace: ceph-csi
+          stringData:
+            userID: admin
+            userKey: "{{ ceph_admin_key }}"
+            admin: "{{ ceph_admin_key }}"
+
+    - name: Agregar el repositorio de Ceph CSI a Helm
+      kubernetes.core.helm_repository:
+        name: ceph-csi-operator
+        repo_url: https://ceph.github.io/ceph-csi-operator
+        force_update: true
+
+    - name: Instalar el operador de Ceph CSI (CRDs y controlador)
+      kubernetes.core.helm:
+        name: ceph-csi-operator
+        chart_ref: ceph-csi-operator/ceph-csi-operator
+        chart_version: "{{ ceph_csi_chart_version }}"
+        release_namespace: ceph-csi
+        create_namespace: true
+        kubeconfig: "{{ kubeconfig_path }}"
+
+    - name: Esperar a que las CRDs de Ceph CSI estén disponibles
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get crd drivers.csi.ceph.io
+      register: crd_check
+      until: crd_check.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Instalar los controladores de Ceph CSI en Kubernetes
+      kubernetes.core.helm:
+        name: ceph-csi-drivers
+        chart_ref: ceph-csi-operator/ceph-csi-drivers
+        chart_version: "{{ ceph_csi_chart_version }}"
+        release_namespace: ceph-csi
+        kubeconfig: "{{ kubeconfig_path }}"
+        values:
+          # Configurar la conexión al Ceph externo vía las CRDs CephConnection/ClientProfile
+          # (el chart ceph-csi-operator/ceph-csi-drivers ya no usa un ConfigMap plano).
+          cephConnections:
+            - name: "{{ ceph_fsid }}"
+              monitors:
+                mon-a: "{{ ceph_mon_ip }}:6789"
+              rbdMirrorDaemonCount: 1
+          clientProfiles:
+            - name: "{{ ceph_fsid }}"
+              cephConnection:
+                name: "{{ ceph_fsid }}"
+        server_side: true
+        force_conflicts: true
+
+    - name: Crear StorageClass para volúmenes RBD de Ceph Externo
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: ceph-block-external
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"
+          provisioner: rbd.csi.ceph.com
+          reclaimPolicy: Delete
+          allowVolumeExpansion: true
+          volumeBindingMode: Immediate
+          parameters:
+            clusterID: "{{ ceph_fsid }}"
+            pool: rbd-k8s
+            imageFormat: "2"
+            imageFeatures: layering
+            csi.storage.k8s.io/provisioner-secret-name: csi-ceph-secret
+            csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi
+            csi.storage.k8s.io/controller-expand-secret-name: csi-ceph-secret
+            csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi
+            csi.storage.k8s.io/node-stage-secret-name: csi-ceph-secret
+            csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi
+            csi.storage.k8s.io/fstype: ext4
+
+    - name: Mostrar resumen de integración
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡CEPH EXTERNO INTEGRADO CON ÉXITO EN KUBERNETES!"
+          - "  "
+          - "  FSID de Ceph: {{ ceph_fsid }}"
+          - "  Monitor IP: {{ ceph_mon_ip }}:6789"
+          - "  StorageClass creada: 'ceph-block-external' (RBD / RWO) [Defecto]"
+          - "════════════════════════════════════════════════════════════════"

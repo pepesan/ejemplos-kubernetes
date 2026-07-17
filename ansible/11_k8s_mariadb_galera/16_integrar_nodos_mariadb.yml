@@ -1,0 +1,124 @@
+---
+# Añade DOS réplicas al clúster MariaDB (Galera): al igual que Percona (lab
+# 10), mariadb-operator exige un tamaño IMPAR (quórum), así que solo se puede
+# escalar de 3 en 3+2=5, nunca +1 — validado en vivo (ver PLAN.md, error real
+# devuelto por el webhook al intentar +1). Al haber justo dos nodos más que
+# réplicas (gracias a 15_add_nodes.yml) y activar `affinity.antiAffinityEnabled`,
+# las nuevas réplicas caen en los nodos recién añadidos de forma determinista.
+- name: Añadir dos réplicas al clúster MariaDB (Galera)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mariadb_release_name: mariadb-galera
+  tasks:
+    - name: Leer la contraseña root de MariaDB desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/mariadb_root_password.txt"
+      register: mariadb_root_password_slurp
+
+    - name: Fijar la contraseña root como variable
+      ansible.builtin.set_fact:
+        mariadb_root_password: "{{ mariadb_root_password_slurp.content | b64decode | trim }}"
+
+    - name: Obtener el tamaño actual del clúster MariaDB
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get mariadb {{ mariadb_release_name }} -o jsonpath={.spec.replicas}
+      register: mariadb_current_size
+      changed_when: false
+
+    - name: "PRUEBA PREVIA: comprobar que el clúster Galera está sano ANTES de escalar (wsrep_cluster_size)"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+      register: wsrep_size_before
+      changed_when: false
+      no_log: true
+      failed_when: wsrep_size_before.stdout.split()[1] | default('0') | int != mariadb_current_size.stdout | int
+
+    - name: "PRUEBA PREVIA: comprobar que todos los nodos Galera están 'Synced' ANTES de escalar"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_state_before
+      changed_when: false
+      no_log: true
+      failed_when: "'Synced' not in wsrep_state_before.stdout"
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: "Estado previo OK: {{ mariadb_current_size.stdout }} réplicas, todas 'Synced' en Galera."
+
+    - name: Calcular el nuevo tamaño (dos réplicas más, para mantenerlo impar)
+      ansible.builtin.set_fact:
+        mariadb_new_size: "{{ mariadb_current_size.stdout | int + 2 }}"
+
+    - name: Ampliar el clúster MariaDB a {{ mariadb_new_size }} réplicas
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: patched
+        kind: MariaDB
+        api_version: k8s.mariadb.com/v1alpha1
+        name: "{{ mariadb_release_name }}"
+        namespace: mariadb
+        definition:
+          spec:
+            replicas: "{{ mariadb_new_size | int }}"
+
+    - name: Esperar a que las nuevas réplicas estén listas (StatefulSet con {{ mariadb_new_size }} réplicas Ready)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get statefulset {{ mariadb_release_name }}
+        -o jsonpath={.status.readyReplicas}
+      register: mariadb_ready_replicas
+      until: mariadb_ready_replicas.stdout | trim == mariadb_new_size | string
+      retries: 40
+      delay: 15
+      changed_when: false
+
+    - name: Comprobar el tamaño del clúster Galera reportado por MariaDB (wsrep_cluster_size)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+      register: wsrep_cluster_size
+      changed_when: false
+      no_log: true
+      until: wsrep_cluster_size.stdout.split()[1] | default('0') | int == mariadb_new_size | int
+      retries: 20
+      delay: 10
+
+    - name: "PRUEBA POSTERIOR: comprobar que todas las réplicas (incluidas las nuevas) quedan 'Synced'"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_state_after
+      changed_when: false
+      no_log: true
+      until: "'Synced' in wsrep_state_after.stdout"
+      retries: 20
+      delay: 10
+
+    - name: Comprobar en qué nodos de Kubernetes han quedado programadas las dos réplicas nuevas
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get pod {{ mariadb_release_name }}-{{ item }}
+        -o jsonpath={.spec.nodeName}
+      register: new_pods_node
+      changed_when: false
+      loop:
+        - "{{ mariadb_new_size | int - 2 }}"
+        - "{{ mariadb_new_size | int - 1 }}"
+
+    - name: Mostrar resumen de la ampliación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡DOS RÉPLICAS AÑADIDAS AL CLÚSTER MARIADB (GALERA) CON ÉXITO!"
+          - "  "
+          - "  Tamaño anterior: {{ mariadb_current_size.stdout }}   Tamaño actual: {{ mariadb_new_size }}"
+          - "  Confirmado también por Galera (wsrep_cluster_size = {{ mariadb_new_size }})."
+          - "  Nuevas réplicas programadas en los nodos: {{ new_pods_node.results | map(attribute='stdout') | join(', ') }}"
+          - "════════════════════════════════════════════════════════════════"

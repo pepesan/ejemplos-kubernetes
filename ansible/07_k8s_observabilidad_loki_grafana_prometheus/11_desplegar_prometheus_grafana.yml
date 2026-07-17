@@ -1,0 +1,90 @@
+---
+- name: Desplegar el stack de métricas (Prometheus Operator + Grafana)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    # Contraseña de Grafana generada una única vez y persistida en un archivo local
+    # fuera del control de versiones (ver .gitignore); en ejecuciones posteriores
+    # se reutiliza la misma en vez de generar una nueva.
+    grafana_admin_password: "{{ lookup('ansible.builtin.password', playbook_dir + '/grafana_admin_password.txt', length=20, chars=['ascii_letters', 'digits']) }}"
+  tasks:
+    - name: Agregar el repositorio de prometheus-community a Helm
+      kubernetes.core.helm_repository:
+        name: prometheus-community
+        repo_url: https://prometheus-community.github.io/helm-charts
+
+    - name: Crear namespace monitoring si no existe
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: monitoring
+
+    - name: Instalar o actualizar kube-prometheus-stack usando Helm
+      kubernetes.core.helm:
+        name: kube-prometheus-stack
+        chart_ref: prometheus-community/kube-prometheus-stack
+        chart_version: "{{ kube_prometheus_stack_chart_version }}"
+        release_namespace: monitoring
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 10m0s
+        values:
+          grafana:
+            adminPassword: "{{ grafana_admin_password }}"
+            service:
+              type: NodePort
+              nodePort: 32091
+            persistence:
+              enabled: true
+              storageClassName: longhorn
+              size: "{{ observability_storage_size }}"
+          prometheus:
+            service:
+              type: NodePort
+              nodePort: 32090
+            prometheusSpec:
+              storageSpec:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: longhorn
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: "{{ observability_storage_size }}"
+          alertmanager:
+            alertmanagerSpec:
+              storage:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: longhorn
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 1Gi
+
+    - name: Esperar a que Grafana esté lista
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n monitoring rollout status deployment/kube-prometheus-stack-grafana --timeout=180s
+      changed_when: false
+
+    - name: Esperar a que Prometheus esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n monitoring rollout status statefulset/prometheus-kube-prometheus-stack-prometheus --timeout=180s
+      changed_when: false
+
+    - name: Mostrar datos de acceso al stack de métricas
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡PROMETHEUS + GRAFANA DESPLEGADOS CON ÉXITO!"
+          - "  "
+          - "  Prometheus: http://{{ k8s_vip_address }}:32090"
+          - "  Grafana:    http://{{ k8s_vip_address }}:32091 (usuario: admin)"
+          - "  Contraseña de Grafana guardada de forma segura en:"
+          - "  {{ playbook_dir }}/grafana_admin_password.txt"
+          - "════════════════════════════════════════════════════════════════"

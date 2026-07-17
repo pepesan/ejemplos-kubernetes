@@ -5,11 +5,11 @@ Este laboratorio despliega un clúster de Kubernetes HA de **6 nodos** (idéntic
 ## 📋 Estructura de Playbooks
 
 *   **`02_crear_nodos.yml`** a **`08_unir_workers.yml`**: reutilizan (`import_playbook`) los playbooks del escenario 02 para crear las 6 VMs y formar el clúster HA.
-*   **`09_desplegar_longhorn.yml`**: instala Longhorn vía Helm como `StorageClass` por defecto (réplica x3 en los 3 workers), sin taints de aislamiento — todos los workers pueden alojar tanto réplicas de datos como cargas de trabajo.
-*   **`10_desplegar_prometheus_grafana.yml`**: instala `kube-prometheus-stack` (Prometheus Operator + Prometheus + Alertmanager + Grafana + node-exporter + kube-state-metrics) vía Helm, con Prometheus y Grafana persistiendo sus datos en volúmenes Longhorn.
-*   **`11_desplegar_loki.yml`**: instala Loki (modo *single binary*, backend de almacenamiento en sistema de archivos sobre un volumen Longhorn) y Promtail (DaemonSet que envía los logs de todos los nodos a Loki), y registra automáticamente Loki como fuente de datos en Grafana.
-*   **`12_verificar_observabilidad.yml`**: comprueba que Prometheus tiene métricas `up`, que Grafana responde, y que Loki ya ha recibido logs de al menos un `job`.
-*   **`13_desplegar_headlamp.yml`**: despliega Headlamp Dashboard (NodePort, igual que en el resto de laboratorios).
+*   **`09_desplegar_headlamp.yml`**: despliega Headlamp Dashboard (NodePort, igual que en el resto de laboratorios) justo después de formar el clúster, para poder seguir el resto de despliegues desde su consola web.
+*   **`10_desplegar_longhorn.yml`**: instala Longhorn vía Helm como `StorageClass` por defecto (réplica x3 en los 3 workers), sin taints de aislamiento — todos los workers pueden alojar tanto réplicas de datos como cargas de trabajo.
+*   **`11_desplegar_prometheus_grafana.yml`**: instala `kube-prometheus-stack` (Prometheus Operator + Prometheus + Alertmanager + Grafana + node-exporter + kube-state-metrics) vía Helm, con Prometheus y Grafana persistiendo sus datos en volúmenes Longhorn.
+*   **`12_desplegar_loki.yml`**: instala Loki (modo *single binary*, backend de almacenamiento en sistema de archivos sobre un volumen Longhorn) y Promtail (DaemonSet que envía los logs de todos los nodos a Loki), y registra automáticamente Loki como fuente de datos en Grafana.
+*   **`13_verificar_observabilidad.yml`**: comprueba que Prometheus tiene métricas `up`, que Grafana responde, y que Loki ya ha recibido logs de al menos un `job`.
 *   **`20_destroy.yml`**: destrucción completa del entorno.
 
 ---

@@ -42,3 +42,6 @@ cilium_version: "1.19.5"
 
 # Dominio local (ficticio) usado para probar el reparto de tráfico Canary.
 gateway_base_domain: "gw.local"
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"

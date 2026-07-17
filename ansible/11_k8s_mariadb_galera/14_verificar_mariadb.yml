@@ -1,0 +1,64 @@
+---
+- name: Verificar la replicación Galera y el acceso externo al clúster MariaDB
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mariadb_release_name: mariadb-galera
+  tasks:
+    - name: Leer la contraseña root de MariaDB desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/mariadb_root_password.txt"
+      register: mariadb_root_password_slurp
+
+    - name: Fijar la contraseña root como variable
+      ansible.builtin.set_fact:
+        mariadb_root_password: "{{ mariadb_root_password_slurp.content | b64decode | trim }}"
+
+    - name: Escribir datos en el primer nodo MariaDB ({{ mariadb_release_name }}-0)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }}
+        -e "CREATE DATABASE IF NOT EXISTS demo; CREATE TABLE IF NOT EXISTS demo.prueba (id INT PRIMARY KEY, valor VARCHAR(50)); REPLACE INTO demo.prueba VALUES (1, 'replicacion-galera-ok');"
+      register: write_result
+      changed_when: false
+      no_log: true
+
+    - name: Esperar a que la escritura se replique (Galera es síncrono, pero damos un margen)
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Leer los datos desde un nodo MariaDB distinto ({{ mariadb_release_name }}-2), para confirmar la replicación Galera
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-2 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SELECT valor FROM demo.prueba WHERE id=1;"
+      register: read_result
+      changed_when: false
+      no_log: true
+      failed_when: "'replicacion-galera-ok' not in read_result.stdout"
+
+    - name: Obtener la IP LoadBalancer del Service primario
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get svc {{ mariadb_release_name }}-primary
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: mariadb_lb_ip
+      changed_when: false
+
+    - name: Comprobar el acceso TCP externo al clúster vía la IP LoadBalancer
+      ansible.builtin.command: >
+        python3 -c "import socket; socket.create_connection(('{{ mariadb_lb_ip.stdout }}', 3306), timeout=10); print('conexion-tcp-ok')"
+      register: external_tcp_check
+      changed_when: false
+      failed_when: "'conexion-tcp-ok' not in external_tcp_check.stdout"
+
+    - name: Mostrar resumen de la verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  VERIFICACIÓN DEL CLÚSTER MARIADB (GALERA)"
+          - "  "
+          - "  Escritura en {{ mariadb_release_name }}-0 y lectura en {{ mariadb_release_name }}-2: replicación Galera confirmada."
+          - "  Acceso TCP externo vía el Service primario ({{ mariadb_lb_ip.stdout }}:3306): conexión OK."
+          - "════════════════════════════════════════════════════════════════"

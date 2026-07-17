@@ -1,0 +1,29 @@
+---
+- name: Destruir el clúster Kubernetes LXD
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Detener y eliminar las máquinas virtuales de los nodos k8s
+      community.general.lxd_container:
+        name: "{{ item }}"
+        type: virtual-machine
+        state: absent
+        force_stop: true
+        timeout: 30
+      loop: "{{ groups['k8s_nodes'] }}"
+
+    - name: Eliminar archivos locales temporales del clúster
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/{{ item }}"
+        state: absent
+      loop:
+        - kubeconfig.yaml
+        - headlamp_token.txt
+        - join_command.txt
+        - certificate_key.txt
+        - pxc_root_password.txt
+
+    - name: Confirmación de eliminación
+      ansible.builtin.debug:
+        msg: "Los nodos del clúster han sido eliminados con éxito de LXD y los archivos locales limpios."

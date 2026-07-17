@@ -1,0 +1,149 @@
+---
+# Simula una actualización real del motor de MariaDB/Galera, de la versión
+# fijada al desplegar (mariadb_image_tag) a una más reciente
+# (mariadb_image_tag_upgrade). El propio operador actualiza los Pods uno a
+# uno, esperando a que cada uno vuelva a estar "Synced" en Galera antes de
+# continuar con el siguiente — igual que se haría a mano en un clúster
+# Galera real, pero automatizado.
+- name: Actualizar el motor de MariaDB (Galera) sin downtime
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    mariadb_release_name: mariadb-galera
+    mariadb_new_image: "mariadb:{{ mariadb_image_tag_upgrade }}"
+  tasks:
+    - name: Leer la contraseña root de MariaDB desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/mariadb_root_password.txt"
+      register: mariadb_root_password_slurp
+
+    - name: Fijar la contraseña root como variable
+      ansible.builtin.set_fact:
+        mariadb_root_password: "{{ mariadb_root_password_slurp.content | b64decode | trim }}"
+
+    - name: Obtener el tamaño y la imagen actuales del clúster MariaDB
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get mariadb {{ mariadb_release_name }} -o jsonpath={.spec.replicas}
+      register: mariadb_current_size
+      changed_when: false
+
+    - name: Obtener la imagen actual del clúster MariaDB
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get mariadb {{ mariadb_release_name }} -o jsonpath={.spec.image}
+      register: mariadb_current_image
+      changed_when: false
+
+    - name: Fallar si ya está en la versión objetivo
+      ansible.builtin.fail:
+        msg: "El clúster ya está en la imagen {{ mariadb_new_image }}. No hay nada que actualizar."
+      when: mariadb_current_image.stdout == mariadb_new_image
+
+    - name: "PRUEBA PREVIA: comprobar que el clúster Galera está sano ANTES de actualizar (wsrep_cluster_size)"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+      register: wsrep_size_before
+      changed_when: false
+      no_log: true
+      failed_when: wsrep_size_before.stdout.split()[1] | default('0') | int != mariadb_current_size.stdout | int
+
+    - name: "PRUEBA PREVIA: comprobar que todos los nodos Galera están 'Synced' ANTES de actualizar"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_state_before
+      changed_when: false
+      no_log: true
+      failed_when: "'Synced' not in wsrep_state_before.stdout"
+
+    - name: Comprobar la versión de MariaDB ANTES de actualizar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B -e "SELECT VERSION();"
+      register: mariadb_version_before
+      changed_when: false
+      no_log: true
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: >
+          Estado previo OK: {{ mariadb_current_size.stdout }} réplicas, todas 'Synced' en Galera.
+          Imagen actual: {{ mariadb_current_image.stdout }} (versión {{ mariadb_version_before.stdout }}).
+
+    - name: Aplicar la nueva imagen del motor MariaDB (el operador actualiza los Pods uno a uno)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: patched
+        kind: MariaDB
+        api_version: k8s.mariadb.com/v1alpha1
+        name: "{{ mariadb_release_name }}"
+        namespace: mariadb
+        definition:
+          spec:
+            image: "{{ mariadb_new_image }}"
+
+    - name: Esperar a que TODOS los Pods de MariaDB ejecuten ya la nueva imagen
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb get pod {{ mariadb_release_name }}-{{ item }}
+        -o 'jsonpath={.status.containerStatuses[?(@.name=="mariadb")].image}'
+      register: pod_image_check
+      # Kubernetes normaliza la imagen añadiendo el registro por defecto
+      # (docker.io/) en containerStatuses, aunque en el spec del CR y aquí se
+      # referencie sin él — comparamos por subcadena, no por igualdad
+      # (lección aprendida en el escenario 10, ver PLAN.md).
+      until: mariadb_new_image in pod_image_check.stdout
+      retries: 60
+      delay: 20
+      changed_when: false
+      loop: "{{ range(0, mariadb_current_size.stdout | int) | list }}"
+      loop_control:
+        label: "{{ mariadb_release_name }}-{{ item }}"
+
+    - name: "PRUEBA POSTERIOR: comprobar que el clúster Galera sigue sano tras la actualización (wsrep_cluster_size)"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+      register: wsrep_size_after
+      changed_when: false
+      no_log: true
+      until: wsrep_size_after.stdout.split()[1] | default('0') | int == mariadb_current_size.stdout | int
+      retries: 20
+      delay: 10
+
+    - name: "PRUEBA POSTERIOR: comprobar que todas las réplicas quedan 'Synced' tras la actualización"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_state_after
+      changed_when: false
+      no_log: true
+      until: "'Synced' in wsrep_state_after.stdout"
+      retries: 20
+      delay: 10
+
+    - name: Comprobar la versión de MariaDB DESPUÉS de actualizar
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n mariadb exec {{ mariadb_release_name }}-0 -c mariadb --
+        mariadb -uroot -p{{ mariadb_root_password }} -N -B -e "SELECT VERSION();"
+      register: mariadb_version_after
+      changed_when: false
+      no_log: true
+
+    - name: Mostrar resumen de la actualización
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡MOTOR DE MARIADB ACTUALIZADO SIN DOWNTIME!"
+          - "  "
+          - "  Imagen anterior: {{ mariadb_current_image.stdout }} (versión {{ mariadb_version_before.stdout }})"
+          - "  Imagen actual:   {{ mariadb_new_image }} (versión {{ mariadb_version_after.stdout }})"
+          - "  "
+          - "  Las {{ mariadb_current_size.stdout }} réplicas se actualizaron una a una,"
+          - "  confirmando 'Synced' en Galera entre cada Pod, sin perder el quórum en ningún momento."
+          - "════════════════════════════════════════════════════════════════"

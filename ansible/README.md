@@ -179,6 +179,87 @@ chmod +x run_all.sh destroy_all.sh
 ./destroy_all.sh   # Para limpiar y borrar todo
 ```
 
+### 8. Gateway API con Cilium (`08_k8s_gateway_api`)
+Ubicación: [08_k8s_gateway_api/](08_k8s_gateway_api/)
+
+Este laboratorio despliega un clúster de Kubernetes HA (basado en el 02: 3 managers + 3 workers) usando **Cilium** como CNI (sustituyendo a Flannel) y como implementación de **Gateway API**, con su LoadBalancer L2 nativo (LB-IPAM + L2Announcement) integrado en el mismo agente — sin MetalLB ni un controlador de Gateway aparte.
+
+Automatiza:
+*   Instalación de Cilium vía Helm con `kubeProxyReplacement: true` (y eliminación previa de `kube-proxy`) y `gatewayAPI.enabled: true`.
+*   Creación de dos objetos `Gateway` separados (uno por protocolo, para evitar un bug conocido de Cilium con listeners de distintos `allowedRoutes.kinds` en un mismo `Gateway`): uno para `HTTPRoute` y otro para `GRPCRoute`.
+*   Despliegue de dos versiones de una app demo (`stable`/`canary`) con reparto de tráfico ponderado 80/20 vía `HTTPRoute`, verificado estadísticamente con 100 peticiones.
+*   Despliegue de un servicio gRPC de ejemplo (`kong/grpcbin`) expuesto vía `GRPCRoute`, verificado con una llamada real (`grpcurl`).
+*   Despliegue de Headlamp justo después de formar el clúster, para poder seguir el resto de despliegues desde su consola web.
+
+Uso rápido:
+```bash
+cd 08_k8s_gateway_api
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
+### 9. Actualización de Clúster HA v1.35→v1.36 (`09_k8s_actualizacion_cluster_ha`)
+Ubicación: [09_k8s_actualizacion_cluster_ha/](09_k8s_actualizacion_cluster_ha/)
+
+Este laboratorio despliega un clúster de Kubernetes HA (basado en el 02: 3 managers + 3 workers) inicialmente en **Kubernetes v1.35**, y ejecuta a continuación el proceso oficial de actualización de `kubeadm` a **v1.36**, nodo a nodo, sin interrumpir la disponibilidad del API server.
+
+Automatiza:
+*   `kubeadm upgrade apply` en el primer manager (el único que aplica los cambios a nivel de clúster).
+*   `kubeadm upgrade node` en el resto de managers y en los workers, uno a uno (`serial: 1`, para no perder nunca el quórum de etcd ni la VIP).
+*   `kubectl drain`/actualización de `kubelet`+`kubectl` (liberando y volviendo a fijar el `apt hold` de versión)/`kubectl uncordon` en cada nodo.
+*   Verificación final de que los 6 nodos reportan la versión objetivo y que la API y los Pods de `kube-system` siguen sanos.
+*   Despliegue de Headlamp antes de empezar la actualización, para poder seguirla en directo desde su consola web.
+
+Uso rápido:
+```bash
+cd 09_k8s_actualizacion_cluster_ha
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar en v1.35 y actualizar a v1.36
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
+### 10. Percona Operator for MySQL — PXC/Galera (`10_k8s_percona_mysql_pxc`)
+Ubicación: [10_k8s_percona_mysql_pxc/](10_k8s_percona_mysql_pxc/)
+
+Primero de una serie de laboratorios centrados en operadores de bases de datos para Kubernetes. Despliega un clúster de Kubernetes HA de 6 nodos (3 managers + 3 workers) en diseño **hiperconvergente** (como el 07: sin nodos de storage dedicados) con **Longhorn** como almacenamiento persistente y **Cilium** como CNI + LoadBalancer L2 (sin Gateway API). Sobre esa base despliega un clúster **Percona XtraDB Cluster** (MySQL con replicación síncrona Galera) gestionado por el **Percona Operator for MySQL**.
+
+Automatiza:
+*   Instalación del Percona Operator for MySQL (`percona/pxc-operator`) y del clúster PXC (`percona/pxc-db`, CRD `PerconaXtraDBCluster`) con 3 réplicas Galera (una por worker, gracias al diseño hiperconvergente) + HAProxy.
+*   Persistencia de los 3 nodos PXC en volúmenes Longhorn.
+*   Exposición del endpoint de escritura (HAProxy) con un `Service` `LoadBalancer` estable (sin Gateway API: `TCPRoute` sigue siendo un recurso experimental, y no aporta nada frente a un `LoadBalancer` normal para este caso de uso).
+*   Verificación de la replicación síncrona Galera (escritura en un nodo, lectura en otro distinto) y del acceso TCP externo.
+*   Contraseña root generada automáticamente por el operador y guardada en `pxc_root_password.txt`, nunca en pantalla.
+
+Uso rápido:
+```bash
+cd 10_k8s_percona_mysql_pxc
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
+### 11. MariaDB Galera — mariadb-operator (`11_k8s_mariadb_galera`)
+Ubicación: [11_k8s_mariadb_galera/](11_k8s_mariadb_galera/)
+
+Segundo de la serie de laboratorios de operadores de bases de datos; a diferencia de los otros tres (todos Percona), usa MariaDB real vía el operador comunitario `mariadb-operator`. Mismo diseño hiperconvergente de 6 nodos + Cilium (CNI + LoadBalancer L2, sin Gateway API) que el 10.
+
+Automatiza:
+*   Instalación de `mariadb-operator` (charts `mariadb-operator-crds` + `mariadb-operator`) y del CRD `MariaDB` con `galera.enabled: true`, 3 réplicas (una por worker).
+*   Persistencia de los 3 nodos en volúmenes Longhorn.
+*   Exposición del endpoint de escritura (`primaryService`) con un `Service` `LoadBalancer` estable.
+*   Verificación de la replicación síncrona Galera y del acceso TCP externo.
+*   Escalado del clúster (2 en 2 réplicas, igual que el 10: el operador también exige un tamaño impar) y actualización del motor MariaDB sin downtime.
+*   Contraseña root generada automáticamente por el operador y guardada en `mariadb_root_password.txt`, nunca en pantalla.
+
+Uso rápido:
+```bash
+cd 11_k8s_mariadb_galera
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
 ---
 
 ## 📐 Decisiones de Diseño y Arquitectura

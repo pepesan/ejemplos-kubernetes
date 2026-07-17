@@ -15,10 +15,13 @@ Este laboratorio contiene una serie de playbooks de Ansible para desplegar de fo
 *   **`03_configurar_os.yml`**: Ajustes de kernel y sysctl obligatorios para Kubernetes en todos los nodos.
 *   **`04_instalar_containerd.yml`**: Instalación del Container Runtime Interface (CRI) en todo el clúster.
 *   **`05_instalar_k8s_tools.yml`**: Instalación de `kubeadm`, `kubelet` y `kubectl` en todos los nodos.
-*   **`06_inicializar_manager.yml`**: Inicialización del plano de control en el Manager, configuración de CNI Flannel y generación/propagación del token de unión.
-*   **`07_unir_workers.yml`**: Ejecución de `kubeadm join` en los workers para conectarlos al Manager de forma automatizada.
-*   **`08_despliegue_test.yml`**: Despliegue de una aplicación web de pruebas (Nginx) con 2 réplicas y verificación de que se balancea correctamente entre los workers.
-*   **`09_desplegar_headlamp.yml`**: Despliegue del dashboard web Headlamp expuesto vía NodePort en el puerto `32082` del Manager.
+*   **`06_inicializar_primer_manager.yml`**: Inicialización del primer manager (kube-vip + `kubeadm init` con `--control-plane-endpoint` y `--upload-certs`), configuración de CNI Flannel y generación/propagación del token de unión.
+*   **`07_unir_managers.yml`**: Unión de los managers adicionales al plano de control HA vía `--certificate-key`.
+*   **`08_unir_workers.yml`**: Ejecución de `kubeadm join` en los workers para conectarlos al clúster (vía la VIP).
+*   **`09_desplegar_headlamp.yml`**: Despliegue del dashboard web Headlamp expuesto vía NodePort en el puerto `32082`, justo después de unir los workers para poder seguir el resto de despliegues desde su consola web.
+*   **`10_despliegue_test.yml`**: Despliegue de una aplicación web de pruebas (Nginx) con 2 réplicas y verificación de que se balancea correctamente entre los workers.
+*   **`11_prueba_resiliencia_ha.yml`**: Prueba de resiliencia HA dedicada — parar y recuperar un worker, y parar y recuperar el manager que hizo el `kubeadm init` inicial, verificando que la VIP conmuta y el clúster nunca deja de responder.
+*   **`12_adicionar_nodo.yml`** / **`13_eliminar_nodo.yml`**: playbooks de escalado (añadir/quitar un worker de forma segura).
 *   **`20_destroy.yml`**: Detención forzada y eliminación de las máquinas virtuales de LXD, además de la limpieza de archivos locales.
 
 ## 🚀 Uso del Laboratorio

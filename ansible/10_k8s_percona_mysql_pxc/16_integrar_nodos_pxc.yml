@@ -1,0 +1,125 @@
+---
+# Añade DOS réplicas al clúster PXC (Galera): el operador exige un tamaño
+# IMPAR (quórum), así que solo se puede escalar de 3 en 3+2=5, nunca +1. Al
+# haber justo dos nodos más que réplicas (gracias a 15_add_nodes.yml), la
+# anti-affinity preferente del operador
+# (pxc.affinity.antiAffinityTopologyKey: kubernetes.io/hostname) coloca las
+# nuevas réplicas en los nodos recién añadidos de forma determinista.
+- name: Añadir dos réplicas al clúster Percona XtraDB Cluster (Galera)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    pxc_release_name: pxc-db
+  tasks:
+    - name: Leer la contraseña root de PXC desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/pxc_root_password.txt"
+      register: pxc_root_password_slurp
+
+    - name: Fijar la contraseña root como variable
+      ansible.builtin.set_fact:
+        pxc_root_password: "{{ pxc_root_password_slurp.content | b64decode | trim }}"
+
+    - name: Obtener el tamaño actual del clúster PXC
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc get pxc {{ pxc_release_name }} -o jsonpath={.spec.pxc.size}
+      register: pxc_current_size
+      changed_when: false
+
+    - name: "PRUEBA PREVIA: comprobar que el clúster Galera está sano ANTES de escalar (wsrep_cluster_size)"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc exec {{ pxc_release_name }}-pxc-0 -c pxc --
+        mysql -uroot -p{{ pxc_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+      register: wsrep_size_before
+      changed_when: false
+      no_log: true
+      failed_when: wsrep_size_before.stdout.split()[1] | default('0') | int != pxc_current_size.stdout | int
+
+    - name: "PRUEBA PREVIA: comprobar que todos los nodos Galera están 'Synced' ANTES de escalar"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc exec {{ pxc_release_name }}-pxc-0 -c pxc --
+        mysql -uroot -p{{ pxc_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_state_before
+      changed_when: false
+      no_log: true
+      failed_when: "'Synced' not in wsrep_state_before.stdout"
+
+    - name: Mostrar estado previo confirmado
+      ansible.builtin.debug:
+        msg: "Estado previo OK: {{ pxc_current_size.stdout }} réplicas, todas 'Synced' en Galera."
+
+    - name: Calcular el nuevo tamaño (dos réplicas más, para mantenerlo impar)
+      ansible.builtin.set_fact:
+        pxc_new_size: "{{ pxc_current_size.stdout | int + 2 }}"
+
+    - name: Ampliar el clúster PXC a {{ pxc_new_size }} réplicas
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: patched
+        kind: PerconaXtraDBCluster
+        api_version: pxc.percona.com/v1
+        name: "{{ pxc_release_name }}"
+        namespace: pxc
+        definition:
+          spec:
+            pxc:
+              size: "{{ pxc_new_size | int }}"
+
+    - name: Esperar a que la nueva réplica esté lista (StatefulSet con {{ pxc_new_size }} réplicas Ready)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc get statefulset {{ pxc_release_name }}-pxc
+        -o jsonpath={.status.readyReplicas}
+      register: pxc_ready_replicas
+      until: pxc_ready_replicas.stdout | trim == pxc_new_size | string
+      retries: 40
+      delay: 15
+      changed_when: false
+
+    - name: Comprobar el tamaño del clúster Galera reportado por MySQL (wsrep_cluster_size)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc exec {{ pxc_release_name }}-pxc-0 -c pxc --
+        mysql -uroot -p{{ pxc_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+      register: wsrep_cluster_size
+      changed_when: false
+      no_log: true
+      until: wsrep_cluster_size.stdout.split()[1] | default('0') | int == pxc_new_size | int
+      retries: 20
+      delay: 10
+
+    - name: "PRUEBA POSTERIOR: comprobar que todas las réplicas (incluida la nueva) quedan 'Synced'"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc exec {{ pxc_release_name }}-pxc-0 -c pxc --
+        mysql -uroot -p{{ pxc_root_password }} -N -B
+        -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+      register: wsrep_state_after
+      changed_when: false
+      no_log: true
+      until: "'Synced' in wsrep_state_after.stdout"
+      retries: 20
+      delay: 10
+
+    - name: Comprobar en qué nodos de Kubernetes han quedado programadas las dos réplicas nuevas
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc get pod {{ pxc_release_name }}-pxc-{{ item }}
+        -o jsonpath={.spec.nodeName}
+      register: new_pods_node
+      changed_when: false
+      loop:
+        - "{{ pxc_new_size | int - 2 }}"
+        - "{{ pxc_new_size | int - 1 }}"
+
+    - name: Mostrar resumen de la ampliación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡DOS RÉPLICAS AÑADIDAS AL CLÚSTER PXC (GALERA) CON ÉXITO!"
+          - "  "
+          - "  Tamaño anterior: {{ pxc_current_size.stdout }}   Tamaño actual: {{ pxc_new_size }}"
+          - "  Confirmado también por Galera (wsrep_cluster_size = {{ pxc_new_size }})."
+          - "  Nuevas réplicas programadas en los nodos: {{ new_pods_node.results | map(attribute='stdout') | join(', ') }}"
+          - "════════════════════════════════════════════════════════════════"

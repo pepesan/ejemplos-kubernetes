@@ -19,3 +19,9 @@ k8s_vip_address: "10.207.154.49"
 k8s_vip_port: 6443
 k8s_vip_interface: enp5s0
 kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"
+
+# Versión del chart de Longhorn
+longhorn_chart_version: "1.12.0"

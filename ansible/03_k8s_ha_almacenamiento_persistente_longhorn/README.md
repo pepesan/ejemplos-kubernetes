@@ -17,9 +17,9 @@ Utiliza **Longhorn** como motor de almacenamiento de bloques y sistema de archiv
 *   **`06_inicializar_primer_manager.yml`**: Inicialización del primer manager (kube-vip + `kubeadm init` con `--control-plane-endpoint` y `--upload-certs`).
 *   **`07_unir_managers.yml`**: Unión de los managers adicionales al plano de control HA vía `--certificate-key`.
 *   **`08_unir_workers.yml`**: Ejecución de `kubeadm join` en los workers y storage nodes para conectarlos al clúster (vía la VIP).
-*   **`09_desplegar_longhorn.yml`**: Despliegue de Longhorn Engine y Dashboard en Kubernetes usando Helm.
-*   **`10_verificar_persistencia_rwx.yml`**: Verificación de persistencia mediante la creación de un PVC RWX y la validación de lecturas/escrituras concurrentes desde pods de prueba.
-*   **`11_desplegar_headlamp.yml`**: Despliegue de Headlamp Dashboard vía Helm y configuración del token de acceso administrador.
+*   **`09_desplegar_headlamp.yml`**: Despliegue de Headlamp Dashboard vía Helm y configuración del token de acceso administrador, justo después de formar el clúster para poder seguir el resto de despliegues desde su consola web.
+*   **`10_desplegar_longhorn.yml`**: Despliegue de Longhorn Engine y Dashboard en Kubernetes usando Helm.
+*   **`11_verificar_persistencia_rwx.yml`**: Verificación de persistencia mediante la creación de un PVC RWX y la validación de lecturas/escrituras concurrentes desde pods de prueba.
 *   **`12_add_node.yml`** / **`13_integrar_nodo_longhorn.yml`** / **`14_eliminar_nodo.yml`**: Playbooks de escalado (añadir/quitar nodos) — ver la sección "Escalar el Clúster" más abajo.
 *   **`20_destroy.yml`**: Detención forzada y eliminación de las máquinas virtuales de LXD, además de la limpieza de archivos locales.
 

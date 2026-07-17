@@ -30,3 +30,10 @@ metallb_ip_range: "10.207.154.70-10.207.154.80"
 # Se resuelve manualmente añadiendo entradas en /etc/hosts apuntando a la IP que
 # MetalLB asigne al Service del Ingress Controller (ver README.md).
 ingress_base_domain: "k8s.local"
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"
+
+# Versiones de los charts de MetalLB y NGINX Ingress Controller
+metallb_chart_version: "0.16.1"
+ingress_nginx_chart_version: "4.15.1"
