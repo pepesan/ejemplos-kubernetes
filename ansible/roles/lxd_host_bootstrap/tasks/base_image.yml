@@ -1,0 +1,13 @@
+---
+- name: List local LXD images
+  ansible.builtin.command: lxc image list -f csv -c l
+  register: lxd_local_images
+  changed_when: false
+  become: false
+
+- name: Copy and import the base image used by every lab instance
+  ansible.builtin.command: >
+    lxc image copy {{ lxd_base_image_remote }} local: --alias {{ lxd_base_image_alias }} --vm
+  when: lxd_base_image_alias not in lxd_local_images.stdout_lines
+  changed_when: true
+  become: false

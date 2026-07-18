@@ -1,0 +1,7 @@
+---
+- name: Install LXD, kubectl and helm via snap
+  community.general.snap:
+    name: "{{ item.name }}"
+    state: present
+    classic: "{{ item.classic | default(omit) }}"
+  loop: "{{ lxd_snap_packages }}"

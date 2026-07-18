@@ -1,0 +1,27 @@
+---
+- name: Verify
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: molecule_test_nodes
+  tasks:
+    - name: Check that every test instance responds over SSH
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        timeout: 5
+      loop: "{{ groups[lxd_machine_provision_group] }}"
+
+    - name: Check that every test instance is the expected LXD type
+      ansible.builtin.command: "lxc info {{ item }}"
+      register: instance_info
+      changed_when: false
+      loop: "{{ groups[lxd_machine_provision_group] }}"
+
+    - name: Assert every instance reports as VM
+      ansible.builtin.assert:
+        that:
+          - "'Type: virtual-machine' in item.stdout"
+        fail_msg: "Instance {{ item.item }} was not created as a virtual-machine."
+      loop: "{{ instance_info.results }}"

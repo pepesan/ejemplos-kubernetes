@@ -1,0 +1,37 @@
+---
+# Static IPv4 is pinned directly on the NIC device (devices.eth0.ipv4.address)
+# rather than via cloud-init, relying on the managed bridge's static-lease
+# support — matches the existing lab pattern this role was extracted from.
+#
+# Note: an LXD image alias is bound to ONE instance format — a "container"
+# image and a "virtual-machine" image are different artifacts even when
+# copied from the same remote source (lxd_host_bootstrap's base_image task
+# only imports the VM variant, matching the labs this role was extracted
+# from). To mix instance types in the same group, override both
+# lxd_instance_type AND lxd_image per host so each points at an alias of
+# the matching type.
+- name: Create LXD instances for every host in "{{ lxd_machine_provision_group }}"
+  community.general.lxd_container:
+    name: "{{ item }}"
+    type: "{{ hostvars[item].lxd_instance_type | default(lxd_instance_type) }}"
+    state: started
+    source:
+      type: image
+      alias: "{{ hostvars[item].lxd_image | default(lxd_image) }}"
+    config:
+      limits.cpu: "{{ hostvars[item].lxd_cpu | string }}"
+      limits.memory: "{{ hostvars[item].lxd_mem }}"
+    devices:
+      eth0:
+        type: nic
+        network: "{{ lxd_network }}"
+        name: eth0
+        ipv4.address: "{{ hostvars[item].ansible_host }}"
+      root:
+        type: disk
+        path: /
+        pool: default
+        size: "{{ hostvars[item].lxd_disk }}"
+    wait_for_ipv4_addresses: false
+    timeout: "{{ lxd_create_timeout }}"
+  loop: "{{ groups[lxd_machine_provision_group] }}"

@@ -1,0 +1,6 @@
+---
+- name: Converge
+  hosts: localhost
+  become: true
+  roles:
+    - lxd_host_bootstrap

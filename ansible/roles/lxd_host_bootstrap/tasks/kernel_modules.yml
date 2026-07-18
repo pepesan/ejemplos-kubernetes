@@ -1,0 +1,14 @@
+---
+# overlay and br_netfilter are needed on the host itself (not just inside
+# each instance) to support the container runtime and CNI bridge routing.
+- name: Load required kernel modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ lxd_kernel_modules }}"
+
+- name: Persist required kernel modules across reboots
+  ansible.builtin.copy:
+    content: "{{ lxd_kernel_modules | join('\n') }}\n"
+    dest: "{{ lxd_kernel_modules_config_path }}"
+    mode: "0644"

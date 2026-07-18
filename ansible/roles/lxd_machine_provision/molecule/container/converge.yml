@@ -1,0 +1,11 @@
+---
+- name: Converge
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: molecule_test_nodes
+    lxd_instance_type: container
+    lxd_image: k8s-template-container
+  roles:
+    - lxd_machine_provision

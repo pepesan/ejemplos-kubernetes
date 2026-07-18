@@ -1,0 +1,33 @@
+---
+# Name of the inventory group to iterate over. Every host in this group is
+# expected to define ansible_host, lxd_cpu, lxd_mem and lxd_disk as
+# per-host vars (see the "Role Variables" table in README.md) — the same
+# hostvars keys already used across this repository's lab inventories, so
+# migrating an existing lab to this role later needs no inventory changes.
+lxd_machine_provision_group: k8s_nodes
+
+# LXD image alias and network every instance is created from/attached to.
+lxd_image: k8s-template
+lxd_network: lxdbr0
+
+# Instance type: "virtual-machine" or "container". Can be overridden per
+# host via hostvars[item].lxd_instance_type to mix both in the same group.
+lxd_instance_type: virtual-machine
+
+# Public half of the keypair pushed into every instance's
+# /root/.ssh/authorized_keys (the private half lives on the host that runs
+# these playbooks — see lxd_host_bootstrap).
+lxd_ssh_pubkey_path: "~/.ssh/id_ed25519.pub"
+
+# How long to wait, and how many times to retry, for the LXD agent to
+# respond inside a freshly created instance before giving up.
+lxd_agent_wait_retries: 30
+lxd_agent_wait_delay: 2
+
+# Timeout (seconds) waiting for SSH to become reachable once the keypair has
+# been injected.
+lxd_ssh_wait_timeout: 60
+
+# Seconds to wait for an IPv4 address before giving up on instance creation
+# itself (only relevant when devices.eth0 doesn't pin a static address).
+lxd_create_timeout: 90

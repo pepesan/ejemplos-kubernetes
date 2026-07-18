@@ -1,0 +1,30 @@
+---
+# This role provisions the host's virtualization layer (LXD itself), so it
+# cannot be exercised inside Molecule's usual container-based drivers
+# (Docker/Podman lack the snapd/kernel-module/virtualization support this
+# role needs). The "delegated" driver runs the role directly against the
+# real host instead of spinning up an isolated test instance — see the
+# README for the reasoning.
+driver:
+  name: delegated
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - converge
+    - idempotence
+    - verify

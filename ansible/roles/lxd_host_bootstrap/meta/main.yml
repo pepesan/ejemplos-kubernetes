@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: lxd_host_bootstrap
+  description: >-
+    Prepares a physical/virtual host to run LXD-based Kubernetes labs:
+    installs LXD, kubectl and helm, initializes LXD's network/storage/profile,
+    and imports the base VM image every lab instance is cloned from.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "26.04"
+
+dependencies: []

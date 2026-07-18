@@ -1,0 +1,41 @@
+---
+- name: Create /root/.ssh in every instance
+  ansible.builtin.command: "lxc exec {{ item }} -- mkdir -p /root/.ssh"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  changed_when: false
+
+- name: Set /root/.ssh permissions
+  ansible.builtin.command: "lxc exec {{ item }} -- chmod 700 /root/.ssh"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  changed_when: false
+
+- name: Read the host's SSH public key
+  ansible.builtin.set_fact:
+    lxd_ssh_pubkey_content: "{{ lookup('ansible.builtin.file', lxd_ssh_pubkey_path) | trim }}"
+
+- name: Check the authorized_keys content already present in every instance
+  ansible.builtin.command: "lxc exec {{ item }} -- cat /root/.ssh/authorized_keys"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  register: lxd_authorized_keys_check
+  changed_when: false
+  failed_when: false
+
+# Only push when the key isn't already there, so re-running this role is a
+# true no-op for every instance that's already provisioned.
+- name: Push the host's SSH public key into instances that don't already have it
+  ansible.builtin.command: "lxc file push {{ lxd_ssh_pubkey_path }} {{ item.item }}/root/.ssh/authorized_keys"
+  loop: "{{ lxd_authorized_keys_check.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: lxd_ssh_pubkey_content not in item.stdout
+  changed_when: true
+
+- name: Set authorized_keys ownership
+  ansible.builtin.command: "lxc exec {{ item }} -- chown -R root:root /root/.ssh"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  changed_when: false
+
+- name: Set authorized_keys permissions
+  ansible.builtin.command: "lxc exec {{ item }} -- chmod 600 /root/.ssh/authorized_keys"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  changed_when: false

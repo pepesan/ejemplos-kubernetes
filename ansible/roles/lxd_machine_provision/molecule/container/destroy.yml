@@ -1,0 +1,13 @@
+---
+- name: Destroy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: molecule_test_nodes
+  tasks:
+    - name: Delete every test instance created by this scenario
+      ansible.builtin.command: "lxc delete --force {{ item }}"
+      loop: "{{ groups[lxd_machine_provision_group] }}"
+      changed_when: true
+      failed_when: false

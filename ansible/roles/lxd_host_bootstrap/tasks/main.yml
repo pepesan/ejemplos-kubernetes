@@ -1,0 +1,33 @@
+---
+- name: Ensure the SSH keypair used to reach LXD instances exists
+  ansible.builtin.import_tasks: ssh_keypair.yml
+  tags: [lxd_host_bootstrap, ssh_keypair]
+
+- name: Install required apt packages and Ansible Galaxy collections
+  ansible.builtin.import_tasks: packages.yml
+  tags: [lxd_host_bootstrap, packages]
+
+- name: Load and persist required kernel modules
+  ansible.builtin.import_tasks: kernel_modules.yml
+  tags: [lxd_host_bootstrap, kernel_modules]
+
+- name: Install LXD, kubectl and helm via snap
+  ansible.builtin.import_tasks: snap_packages.yml
+  tags: [lxd_host_bootstrap, snap_packages]
+
+# Depends on the "lxd" snap being installed above, and needs virtualization
+# support on the host — cannot run inside a plain container. See the
+# molecule/ scenario for how this is exercised in CI.
+- name: Initialize LXD (network, storage pool, default profile)
+  ansible.builtin.import_tasks: lxd_init.yml
+  tags: [lxd_host_bootstrap, lxd_init, requires_virtualization]
+
+- name: Add the host user to the lxd group
+  ansible.builtin.import_tasks: user_group.yml
+  tags: [lxd_host_bootstrap, user_group]
+
+# Needs the network/storage/profile set up above, and downloads/imports a
+# real VM-capable image — same virtualization requirement as lxd_init.
+- name: Import the base image used by every lab instance
+  ansible.builtin.import_tasks: base_image.yml
+  tags: [lxd_host_bootstrap, base_image, requires_virtualization]

@@ -1,0 +1,40 @@
+---
+- name: Check whether LXD is already initialized
+  ansible.builtin.command: "lxc network show {{ lxd_network_name }}"
+  register: lxd_network_check
+  changed_when: false
+  failed_when: false
+
+- name: Initialize LXD via preseed (network, storage pool, default profile)
+  ansible.builtin.shell: |
+    cat <<EOF | lxd init --preseed
+    config: {}
+    networks:
+    - config:
+        ipv4.address: {{ lxd_network_subnet }}
+        ipv4.nat: "true"
+        ipv6.address: none
+      description: "Managed network for Kubernetes labs"
+      name: {{ lxd_network_name }}
+      type: bridge
+    storage_pools:
+    - config: {}
+      description: "Default storage pool"
+      name: {{ lxd_storage_pool_name }}
+      driver: {{ lxd_storage_pool_driver }}
+    profiles:
+    - config: {}
+      description: "Default profile for LXD instances"
+      devices:
+        eth0:
+          name: eth0
+          network: {{ lxd_network_name }}
+          type: nic
+        root:
+          path: /
+          pool: {{ lxd_storage_pool_name }}
+          type: disk
+      name: default
+    EOF
+  when: lxd_network_check.rc != 0
+  changed_when: true

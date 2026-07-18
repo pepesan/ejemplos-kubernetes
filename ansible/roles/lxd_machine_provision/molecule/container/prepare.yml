@@ -1,0 +1,21 @@
+---
+# LXD image aliases are bound to one instance format — the "k8s-template"
+# alias imported by lxd_host_bootstrap is VM-only (imported with --vm), so
+# this scenario needs its own container-format image to test against.
+- name: Prepare
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_container_test_image_alias: k8s-template-container
+  tasks:
+    - name: List local LXD images
+      ansible.builtin.command: lxc image list -f csv -c l
+      register: lxd_local_images
+      changed_when: false
+
+    - name: Import a container-format test image, if not already present
+      ansible.builtin.command: >
+        lxc image copy ubuntu:26.04 local: --alias {{ lxd_container_test_image_alias }}
+      when: lxd_container_test_image_alias not in lxd_local_images.stdout_lines
+      changed_when: true

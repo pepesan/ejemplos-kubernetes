@@ -1,0 +1,10 @@
+---
+- name: Converge
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: molecule_test_nodes
+    lxd_instance_type: virtual-machine
+  roles:
+    - lxd_machine_provision

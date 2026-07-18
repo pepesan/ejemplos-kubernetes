@@ -1,0 +1,39 @@
+---
+# This role creates real LXD instances, so it's tested with the "delegated"
+# driver against the real host (which must already be bootstrapped by
+# lxd_host_bootstrap) instead of an isolated container-based driver. This
+# scenario provisions a single throwaway virtual-machine instance.
+driver:
+  name: delegated
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  inventory:
+    hosts:
+      all:
+        hosts:
+          localhost:
+            ansible_connection: local
+        children:
+          molecule_test_nodes:
+            hosts:
+              molecule-test-vm-1:
+                ansible_host: 10.207.154.90
+                lxd_cpu: 1
+                lxd_mem: 1GB
+                lxd_disk: 10GB
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - converge
+    - idempotence
+    - verify
+    - destroy

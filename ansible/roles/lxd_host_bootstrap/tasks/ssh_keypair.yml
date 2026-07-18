@@ -1,0 +1,10 @@
+---
+# Required so the host can connect passwordless as root to every LXD
+# instance created later (the public half gets pushed into each instance by
+# lxd_machine_provision).
+- name: Ensure an SSH keypair exists for connecting to LXD instances
+  ansible.builtin.openssh_keypair:
+    path: "{{ lxd_ssh_key_path }}"
+    type: "{{ lxd_ssh_key_type }}"
+    comment: "{{ lxd_ssh_key_comment }}"
+  become: false

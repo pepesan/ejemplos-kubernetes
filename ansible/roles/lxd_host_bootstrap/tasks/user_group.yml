@@ -1,0 +1,7 @@
+---
+- name: Add the host user to the lxd group (so lxc commands work without sudo)
+  ansible.builtin.user:
+    name: "{{ lxd_host_user }}"
+    groups: lxd
+    append: true
+  register: lxd_user_group_update

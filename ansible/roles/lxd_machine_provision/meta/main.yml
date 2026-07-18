@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: lxd_machine_provision
+  description: >-
+    Creates LXD instances (virtual machines or containers) from a given
+    inventory group, waits for the LXD agent, injects the host's SSH
+    public key, and waits for SSH to become reachable — the common
+    machine-provisioning step every LXD-based Kubernetes lab in this
+    repository needs.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "26.04"
+
+dependencies: []

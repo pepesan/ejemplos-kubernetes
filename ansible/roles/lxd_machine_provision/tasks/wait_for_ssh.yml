@@ -1,0 +1,13 @@
+---
+- name: Wait for SSH to be reachable on every instance
+  ansible.builtin.wait_for:
+    host: "{{ hostvars[item].ansible_host }}"
+    port: 22
+    delay: 2
+    timeout: "{{ lxd_ssh_wait_timeout }}"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+
+- name: Report every instance as ready
+  ansible.builtin.debug:
+    msg: "Instance {{ item }} created with IP {{ hostvars[item].ansible_host }}."
+  loop: "{{ groups[lxd_machine_provision_group] }}"

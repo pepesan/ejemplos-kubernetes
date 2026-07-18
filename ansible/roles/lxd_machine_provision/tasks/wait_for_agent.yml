@@ -1,0 +1,9 @@
+---
+- name: Wait for the LXD agent to be responsive in every instance
+  ansible.builtin.command: "lxc exec {{ item }} -- true"
+  register: lxd_agent_status
+  until: lxd_agent_status.rc == 0
+  retries: "{{ lxd_agent_wait_retries }}"
+  delay: "{{ lxd_agent_wait_delay }}"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  changed_when: false

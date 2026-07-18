@@ -1,0 +1,16 @@
+---
+- name: Create every LXD instance in the target group
+  ansible.builtin.import_tasks: create_instances.yml
+  tags: [lxd_machine_provision, create_instances]
+
+- name: Wait for the LXD agent to respond in every instance
+  ansible.builtin.import_tasks: wait_for_agent.yml
+  tags: [lxd_machine_provision, wait_for_agent]
+
+- name: Inject the host's SSH public key into every instance
+  ansible.builtin.import_tasks: inject_ssh_key.yml
+  tags: [lxd_machine_provision, inject_ssh_key]
+
+- name: Wait for SSH to be reachable on every instance
+  ansible.builtin.import_tasks: wait_for_ssh.yml
+  tags: [lxd_machine_provision, wait_for_ssh]

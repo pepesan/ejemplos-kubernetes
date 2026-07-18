@@ -1,0 +1,56 @@
+---
+# System user LXD will be initialized for and added to the "lxd" group.
+lxd_host_user: "{{ lookup('env', 'USER') }}"
+
+# SSH keypair used later to reach every LXD instance as root (see
+# lxd_machine_provision). Generated here so it always exists before any
+# instance gets created.
+lxd_ssh_key_path: "~/.ssh/id_ed25519"
+lxd_ssh_key_type: ed25519
+lxd_ssh_key_comment: "lxd-lab-host-key"
+
+# System packages required on the host: snapd (to install lxd/kubectl/helm),
+# curl, and the Python libraries the kubernetes.core collection needs to
+# talk to a cluster's API without shelling out to kubectl.
+lxd_apt_packages:
+  - snapd
+  - curl
+  - python3-kubernetes
+  - python3-jsonpatch
+  - python3-yaml
+
+# Ansible Galaxy collections required by the roles/playbooks that will run
+# against the instances this host provisions.
+lxd_galaxy_collections:
+  - community.general
+  - kubernetes.core
+
+# Kernel modules needed for the container/VM network stack (CNI bridging)
+# and the container runtime (containerd) running inside each instance.
+lxd_kernel_modules:
+  - overlay
+  - br_netfilter
+lxd_kernel_modules_config_path: /etc/modules-load.d/lxd-lab-host.conf
+
+# Snap packages installed on the host: lxd itself, plus the CLI tools used
+# to drive whatever gets deployed inside the instances.
+lxd_snap_packages:
+  - name: lxd
+  - name: kubectl
+    classic: true
+  - name: helm
+    classic: true
+
+# LXD network bridge created by "lxd init --preseed".
+lxd_network_name: lxdbr0
+lxd_network_subnet: "10.207.154.1/24"
+
+# LXD storage pool created by "lxd init --preseed".
+lxd_storage_pool_name: default
+lxd_storage_pool_driver: dir
+
+# Base image every instance in the lab is cloned from. Copied locally from
+# the "ubuntu:" remote and aliased so lxd_machine_provision can reference it
+# by name instead of a remote image fingerprint.
+lxd_base_image_remote: "ubuntu:26.04"
+lxd_base_image_alias: k8s-template

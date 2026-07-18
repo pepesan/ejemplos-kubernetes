@@ -1,0 +1,33 @@
+---
+- name: Verify
+  hosts: localhost
+  become: false
+  gather_facts: false
+  vars:
+    lxd_network_name: lxdbr0
+    lxd_storage_pool_name: default
+    lxd_base_image_alias: k8s-template
+  tasks:
+    - name: Check that the LXD network bridge exists
+      ansible.builtin.command: "lxc network show {{ lxd_network_name }}"
+      register: network_check
+      changed_when: false
+
+    - name: Check that the LXD storage pool exists
+      ansible.builtin.command: "lxc storage show {{ lxd_storage_pool_name }}"
+      register: storage_check
+      changed_when: false
+
+    - name: Check that the base image was imported and aliased
+      ansible.builtin.command: lxc image list -f csv -c l
+      register: image_list
+      changed_when: false
+
+    - name: Assert every check passed
+      ansible.builtin.assert:
+        that:
+          - network_check.rc == 0
+          - storage_check.rc == 0
+          - lxd_base_image_alias in image_list.stdout_lines
+        fail_msg: "LXD host bootstrap verification failed — see the individual task results above."
+        success_msg: "LXD host bootstrap verified: network, storage pool and base image are all in place."
