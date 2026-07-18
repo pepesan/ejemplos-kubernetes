@@ -1,11 +1,21 @@
 ---
 # overlay and br_netfilter are needed on the host itself (not just inside
 # each instance) to support the container runtime and CNI bridge routing.
+#
+# Loading a kernel module is inherently a host/VM-level concern — a
+# container shares its host's kernel, so there's no meaningful per-container
+# module to load, and the "modprobe" executable itself may not even be
+# present in a minimal container image (confirmed live: missing on one of
+# the Debian 12 test containers in ansible/scripts/, while it happened to
+# succeed on the others only because that module was already loaded at the
+# host level and visible inside the container). Tagged so a container-based
+# test can skip it, same reasoning as requires_virtualization.
 - name: Load required kernel modules
   community.general.modprobe:
     name: "{{ item }}"
     state: present
   loop: "{{ lxd_kernel_modules }}"
+  tags: [requires_virtualization]
 
 - name: Persist required kernel modules across reboots
   ansible.builtin.copy:

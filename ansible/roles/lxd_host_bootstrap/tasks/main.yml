@@ -11,9 +11,15 @@
   ansible.builtin.import_tasks: kernel_modules.yml
   tags: [lxd_host_bootstrap, kernel_modules]
 
+# Installing/running snapd (squashfs mounts, AppArmor) is generally
+# unreliable inside a lightweight container regardless of distro — same
+# "needs a real host/VM" category as kernel module loading and lxd_init.
+# Confirmed live: even the classic-mount symlink step failed on every
+# distro's test container with "/snap is not empty, refusing to convert
+# it" (LXD appears to inject a /snap entry into containers on its own).
 - name: Install LXD, kubectl and helm via snap
   ansible.builtin.import_tasks: snap_packages.yml
-  tags: [lxd_host_bootstrap, snap_packages]
+  tags: [lxd_host_bootstrap, snap_packages, requires_virtualization]
 
 # Depends on the "lxd" snap being installed above, and needs virtualization
 # support on the host — cannot run inside a plain container. See the
@@ -22,9 +28,13 @@
   ansible.builtin.import_tasks: lxd_init.yml
   tags: [lxd_host_bootstrap, lxd_init, requires_virtualization]
 
+# The "lxd" group is created by the lxd snap package itself (skipped
+# above alongside snap_packages) — Ubuntu's base images happen to predefine
+# it anyway, but Debian's don't (confirmed live: this task only failed on
+# the Debian test containers, with "Group lxd does not exist").
 - name: Add the host user to the lxd group
   ansible.builtin.import_tasks: user_group.yml
-  tags: [lxd_host_bootstrap, user_group]
+  tags: [lxd_host_bootstrap, user_group, requires_virtualization]
 
 # Needs the network/storage/profile set up above, and downloads/imports a
 # real VM-capable image — same virtualization requirement as lxd_init.

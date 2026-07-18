@@ -1,12 +1,12 @@
 ---
 # System user LXD will be initialized for and added to the "lxd" group.
-# Resolved from ansible_env.SUDO_USER when present (i.e. the play was
+# Resolved from ansible_facts.env.SUDO_USER when present (i.e. the play was
 # invoked directly as root via "sudo ansible-playbook ...") so it still
 # points at the real human user rather than "root"; falls back to
-# ansible_user_id (the connecting user) when the play was invoked as a
-# regular user escalating via become instead. A plain "lookup('env',
+# ansible_facts.user_id (the connecting user) when the play was invoked as
+# a regular user escalating via become instead. A plain "lookup('env',
 # 'USER')" would resolve to "root" in the first case, which is wrong.
-lxd_host_user: "{{ ansible_env.SUDO_USER | default(ansible_user_id) }}"
+lxd_host_user: "{{ ansible_facts.env.SUDO_USER | default(ansible_facts.user_id) }}"
 
 # SSH keypair used later to reach every LXD instance as root (see
 # lxd_machine_provision). Generated here so it always exists before any

@@ -11,6 +11,11 @@ galaxy_info:
   platforms:
     - name: Ubuntu
       versions:
+        - "24.04"
         - "26.04"
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
 
 dependencies: []

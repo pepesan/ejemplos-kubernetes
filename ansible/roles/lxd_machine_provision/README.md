@@ -14,6 +14,13 @@ Requires `lxd_host_bootstrap` to have run first (or an equivalent, already
 initialized LXD host with the target image imported and an SSH keypair
 generated).
 
+## Requirements
+
+- Ubuntu 24.04/26.04 or Debian 12 (bookworm)/13 (trixie) as the LXD host.
+  This role itself has no distro-specific logic — it only calls `lxc` and
+  generic Ansible modules — so it works identically on both; the platform
+  constraint comes entirely from `lxd_host_bootstrap`.
+
 ## Instance type: VM or container
 
 By default every instance is created as a `virtual-machine` (matching the

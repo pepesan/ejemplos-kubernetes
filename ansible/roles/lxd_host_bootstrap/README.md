@@ -23,10 +23,19 @@ always re-checks upstream).
 
 ## Requirements
 
-- Ubuntu 26.04 host with `sudo`/root access.
+- Ubuntu 24.04/26.04 or Debian 12 (bookworm)/13 (trixie) host with `sudo`/root access.
 - Real virtualization support for the `lxd_init` and `base_image` tasks
   (tagged `requires_virtualization`) — these cannot run inside a plain,
   unprivileged container. See `molecule/default/` for how this is tested.
+
+### A note on Debian
+
+Everything here works identically on Debian, with one distro difference the
+role already handles: Ubuntu's `snapd` package sets up the classic `/snap`
+symlink automatically, Debian's does not — without it, classic-confinement
+snaps (`kubectl`, `helm`) fail to resolve their paths. The role creates
+this symlink itself (`tasks/snap_packages.yml`), so no extra setup is
+needed on Debian.
 
 ## Role Variables
 

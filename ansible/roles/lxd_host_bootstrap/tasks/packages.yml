@@ -8,6 +8,15 @@
 # Explicitly targets lxd_host_user (see ssh_keypair.yml for why) so the
 # collections land in that user's ~/.ansible/collections, not root's, since
 # labs are run by that user directly, without sudo.
+#
+# Requires the "ansible-galaxy" executable to already be present on the
+# target — trivially true for this role's real usage (connection: local,
+# the same machine already running ansible-playbook to get this far), but
+# NOT true if this role is ever pointed at a genuinely separate/fresh
+# target over a remote connection (confirmed live via the distro test
+# harness in ansible/scripts/, which does exactly that). Tagged so such a
+# test can skip it explicitly instead of failing on an assumption the role
+# was never meant to make in its normal (local) usage.
 - name: Ensure required Ansible Galaxy collections are installed and up to date
   community.general.ansible_galaxy_install:
     name: "{{ item }}"
@@ -16,3 +25,4 @@
   loop: "{{ lxd_galaxy_collections }}"
   become: true
   become_user: "{{ lxd_host_user }}"
+  tags: [requires_ansible_control_node]

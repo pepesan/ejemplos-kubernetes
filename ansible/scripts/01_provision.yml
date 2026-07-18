@@ -1,0 +1,40 @@
+---
+# Doesn't reuse lxd_machine_provision here on purpose: that role is
+# SSH-oriented (it exists to provision instances the labs will actually SSH
+# into) and already has its own Molecule coverage for that. This test only
+# needs a plain, running container reachable via "lxc exec" — no SSH keys,
+# no static IP, no waiting for a network to come up.
+- name: Create a plain throwaway container per target distro
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Create each container
+      community.general.lxd_container:
+        name: "{{ item }}"
+        type: container
+        state: started
+        source:
+          type: image
+          alias: "{{ hostvars[item].lxd_image }}"
+        wait_for_ipv4_addresses: false
+        timeout: 60
+      loop: "{{ groups['distro_test_nodes'] }}"
+
+    - name: Wait for each container's LXD agent to respond
+      ansible.builtin.command: "lxc exec {{ item }} -- true"
+      register: agent_status
+      until: agent_status.rc == 0
+      retries: 30
+      delay: 2
+      loop: "{{ groups['distro_test_nodes'] }}"
+      changed_when: false
+
+    # Ansible needs a Python interpreter on the target for anything beyond
+    # raw shell commands (including fact gathering). Ubuntu's cloud images
+    # ship python3 already; Debian's minimal container images don't
+    # (confirmed live: "gather_facts" failed with "python3: not found").
+    - name: Ensure python3 is present in each container (Debian's minimal images lack it)
+      ansible.builtin.command: "lxc exec {{ item }} -- sh -c 'apt-get update && apt-get install -y python3'"
+      loop: "{{ groups['distro_test_nodes'] }}"
+      changed_when: true

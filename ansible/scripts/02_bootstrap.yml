@@ -1,0 +1,9 @@
+---
+# Connects via the community.general.lxd connection plugin (see
+# inventory_distro_test.ini), which executes as root inside the container
+# by default — no "become" needed.
+- name: Run lxd_host_bootstrap against every distro test container
+  hosts: distro_test_nodes
+  become: false
+  roles:
+    - lxd_host_bootstrap

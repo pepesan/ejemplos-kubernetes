@@ -1,0 +1,35 @@
+---
+# Imports one container-format image per distro this role claims to support
+# (ansible/roles/lxd_host_bootstrap/meta/main.yml), skipping any already
+# present. Container format (no "--vm") is enough here: this test only
+# exercises the OS-package-level tasks of lxd_host_bootstrap (apt, snap,
+# kernel modules), not lxd_init/base_image, which need real virtualization
+# and are skipped via --skip-tags requires_virtualization.
+- name: Import container-format test images for every supported distro
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    distro_test_images:
+      - alias: test-ubuntu-2404
+        remote_image: "ubuntu:24.04"
+      - alias: test-ubuntu-2604
+        remote_image: "ubuntu:26.04"
+      - alias: test-debian-12
+        remote_image: "images:debian/12"
+      - alias: test-debian-13
+        remote_image: "images:debian/13"
+  tasks:
+    - name: List local LXD images
+      ansible.builtin.command: lxc image list -f csv -c l
+      register: lxd_local_images
+      changed_when: false
+
+    - name: Import each distro test image, if not already present
+      ansible.builtin.command: >
+        lxc image copy {{ item.remote_image }} local: --alias {{ item.alias }}
+      loop: "{{ distro_test_images }}"
+      loop_control:
+        label: "{{ item.alias }}"
+      when: item.alias not in lxd_local_images.stdout_lines
+      changed_when: true

@@ -1,0 +1,11 @@
+---
+- name: Delete every distro test container
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Delete each test container
+      ansible.builtin.command: "lxc delete --force {{ item }}"
+      loop: "{{ groups['distro_test_nodes'] }}"
+      changed_when: true
+      failed_when: false
