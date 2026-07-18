@@ -5,10 +5,14 @@
     state: present
     update_cache: true
 
+# Explicitly targets lxd_host_user (see ssh_keypair.yml for why) so the
+# collections land in that user's ~/.ansible/collections, not root's, since
+# labs are run by that user directly, without sudo.
 - name: Ensure required Ansible Galaxy collections are installed and up to date
   community.general.ansible_galaxy_install:
     name: "{{ item }}"
     type: collection
     state: latest
   loop: "{{ lxd_galaxy_collections }}"
-  become: false
+  become: true
+  become_user: "{{ lxd_host_user }}"

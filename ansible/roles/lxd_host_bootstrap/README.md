@@ -35,7 +35,7 @@ most relevant ones:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `lxd_host_user` | `$USER` | User added to the `lxd` group |
+| `lxd_host_user` | `SUDO_USER` env var, falling back to the connecting user | User added to the `lxd` group; also who the SSH keypair and Ansible Galaxy collections get created for, regardless of whether the play was invoked as a regular user escalating via `become` or run as root directly |
 | `lxd_ssh_key_path` | `~/.ssh/id_ed25519` | Keypair used to reach LXD instances |
 | `lxd_network_name` | `lxdbr0` | LXD-managed bridge name |
 | `lxd_network_subnet` | `10.207.154.1/24` | Bridge subnet |

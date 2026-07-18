@@ -2,9 +2,18 @@
 # Required so the host can connect passwordless as root to every LXD
 # instance created later (the public half gets pushed into each instance by
 # lxd_machine_provision).
+#
+# Explicitly targets lxd_host_user via become_user instead of relying on
+# "whoever the play happens to be connecting as" (via become: false) — that
+# assumption only holds when the play is invoked as a regular user
+# escalating to root elsewhere, and silently creates the key under /root
+# instead when the whole process is already running as root (e.g. "sudo
+# ansible-playbook ..."), since "~" would then resolve to root's home.
+# Naming the target user explicitly makes this correct either way.
 - name: Ensure an SSH keypair exists for connecting to LXD instances
   ansible.builtin.openssh_keypair:
     path: "{{ lxd_ssh_key_path }}"
     type: "{{ lxd_ssh_key_type }}"
     comment: "{{ lxd_ssh_key_comment }}"
-  become: false
+  become: true
+  become_user: "{{ lxd_host_user }}"
