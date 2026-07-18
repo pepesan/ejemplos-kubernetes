@@ -1,0 +1,64 @@
+---
+- name: Verificar la replicación Galera y el acceso externo al clúster PXC
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    pxc_release_name: pxc-db
+  tasks:
+    - name: Leer la contraseña root de PXC desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/pxc_root_password.txt"
+      register: pxc_root_password_slurp
+
+    - name: Fijar la contraseña root como variable
+      ansible.builtin.set_fact:
+        pxc_root_password: "{{ pxc_root_password_slurp.content | b64decode | trim }}"
+
+    - name: Escribir datos en el primer nodo PXC (pxc-db-pxc-0)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc exec {{ pxc_release_name }}-pxc-0 -c pxc --
+        mysql -uroot -p{{ pxc_root_password }}
+        -e "CREATE DATABASE IF NOT EXISTS demo; CREATE TABLE IF NOT EXISTS demo.prueba (id INT PRIMARY KEY, valor VARCHAR(50)); REPLACE INTO demo.prueba VALUES (1, 'replicacion-galera-ok');"
+      register: write_result
+      changed_when: false
+      no_log: true
+
+    - name: Esperar a que la escritura se replique (Galera es síncrono, pero damos un margen)
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Leer los datos desde un nodo PXC distinto (pxc-db-pxc-2), para confirmar la replicación Galera
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc exec {{ pxc_release_name }}-pxc-2 -c pxc --
+        mysql -uroot -p{{ pxc_root_password }} -N -B
+        -e "SELECT valor FROM demo.prueba WHERE id=1;"
+      register: read_result
+      changed_when: false
+      no_log: true
+      failed_when: "'replicacion-galera-ok' not in read_result.stdout"
+
+    - name: Obtener la IP LoadBalancer de HAProxy
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc get svc {{ pxc_release_name }}-haproxy
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: pxc_lb_ip
+      changed_when: false
+
+    - name: Comprobar el acceso TCP externo al clúster vía la IP LoadBalancer
+      ansible.builtin.command: >
+        python3 -c "import socket; socket.create_connection(('{{ pxc_lb_ip.stdout }}', 3306), timeout=10); print('conexion-tcp-ok')"
+      register: external_tcp_check
+      changed_when: false
+      failed_when: "'conexion-tcp-ok' not in external_tcp_check.stdout"
+
+    - name: Mostrar resumen de la verificación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  VERIFICACIÓN DEL CLÚSTER PERCONA XTRADB (GALERA)"
+          - "  "
+          - "  Escritura en pxc-0 y lectura en pxc-2: replicación Galera confirmada."
+          - "  Acceso TCP externo vía HAProxy ({{ pxc_lb_ip.stdout }}:3306): conexión OK."
+          - "════════════════════════════════════════════════════════════════"

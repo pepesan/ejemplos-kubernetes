@@ -303,6 +303,27 @@ chmod +x run_all.sh destroy_all.sh
 ./destroy_all.sh   # Para limpiar y borrar todo
 ```
 
+### 14. HashiCorp Vault — Secretos Dinámicos de Base de Datos (`14_k8s_vault_secretos_bbdd`)
+Ubicación: [14_k8s_vault_secretos_bbdd/](14_k8s_vault_secretos_bbdd/)
+
+Último laboratorio del repositorio. Sobre el mismo diseño hiperconvergente de 6 nodos del escenario 10 (Cilium + Longhorn + Percona XtraDB Cluster), instala **HashiCorp Vault** en modo HA (Raft integrado, 3 réplicas) para demostrar sus usos en orden creciente de complejidad: primero el motor **KV** de secretos estáticos (el más básico y habitual), luego **secretos dinámicos de base de datos** — credenciales MySQL generadas bajo demanda, de corta duración, revocadas automáticamente al expirar.
+
+Automatiza:
+*   Vault HA con almacenamiento Raft integrado (sin Consul) y unseal manual con claves Shamir.
+*   Motor KV v2 de secretos estáticos, verificado con una escritura/lectura real.
+*   Autenticación Kubernetes (los Pods se autentican con el JWT de su propio `ServiceAccount`, sin credenciales hardcodeadas) y una policy que limita qué puede leer la app de ejemplo.
+*   Database Secrets Engine apuntando al clúster PXC, con un usuario MySQL dedicado de privilegios mínimos (nunca root) para la gestión de credenciales dinámicas.
+*   Vault CSI Provider (Secrets Store CSI Driver) para montar la credencial dinámica directamente como archivo en el Pod de una app de ejemplo, sin pasar nunca por un `Secret` nativo de Kubernetes.
+*   Verificación real de extremo a extremo: conexión a MySQL con la credencial generada, confirmación del usuario efímero en la base de datos, y comprobación de que Vault lo revoca automáticamente al expirar su TTL.
+
+Uso rápido:
+```bash
+cd 14_k8s_vault_secretos_bbdd
+chmod +x run_all.sh destroy_all.sh
+./run_all.sh       # Para desplegar
+./destroy_all.sh   # Para limpiar y borrar todo
+```
+
 ---
 
 ## 📐 Decisiones de Diseño y Arquitectura

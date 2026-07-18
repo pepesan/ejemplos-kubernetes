@@ -1,0 +1,150 @@
+---
+# Inicializa Vault (genera la clave maestra repartida en fragmentos Shamir +
+# el token root) y desella los 3 Pods. `vault status` devuelve código de
+# salida 2 cuando Vault está sellado (no es un fallo de Ansible, es el
+# comportamiento normal de la CLI) — por eso todas las comprobaciones de
+# estado llevan `failed_when: false`.
+#
+# Idempotente: si ya existe el archivo local con las claves (de una
+# ejecución anterior), no se vuelve a inicializar — Vault solo se puede
+# inicializar UNA vez en la vida de sus datos; se reutilizan esas claves
+# para desellar los Pods que lo necesiten (p.ej. tras un reinicio).
+- name: Inicializar y desellar HashiCorp Vault
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    vault_namespace: vault
+    vault_credentials_file: "{{ playbook_dir }}/vault_credentials.json"
+  tasks:
+    - name: Comprobar si ya existe el archivo local de credenciales de Vault
+      ansible.builtin.stat:
+        path: "{{ vault_credentials_file }}"
+      register: vault_credentials_file_status
+
+    - name: Comprobar si vault-0 ya está inicializado
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec vault-0 --
+        vault status -format=json
+      register: vault0_status_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Fijar si Vault ya estaba inicializado antes de este playbook
+      ansible.builtin.set_fact:
+        vault_ya_inicializado: "{{ (vault0_status_raw.stdout | from_json).initialized | default(false) }}"
+
+    - name: Fallar si Vault ya está inicializado pero no existe el archivo local de claves
+      ansible.builtin.fail:
+        msg: >
+          Vault ya está inicializado pero no existe {{ vault_credentials_file }} con sus claves de
+          unseal — no hay forma de recuperarlas (no se guardan en ningún otro sitio, por diseño). Si
+          esto es un clúster nuevo, destrúyelo y vuelve a empezar; si el archivo se perdió por error,
+          este Vault ya no se puede desellar y hay que reinstalarlo desde cero.
+      when: vault_ya_inicializado and not vault_credentials_file_status.stat.exists
+
+    - name: Inicializar Vault (genera claves de unseal Shamir + token root)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec vault-0 --
+        vault operator init
+        -key-shares={{ vault_unseal_shares }}
+        -key-threshold={{ vault_unseal_threshold }}
+        -format=json
+      register: vault_init_result
+      changed_when: true
+      no_log: true
+      when: not vault_ya_inicializado
+
+    - name: Guardar las claves de unseal y el token root en un archivo local
+      ansible.builtin.copy:
+        content: "{{ vault_init_result.stdout }}"
+        dest: "{{ vault_credentials_file }}"
+        mode: "0600"
+      when: not vault_ya_inicializado
+
+    - name: Leer las credenciales de Vault desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ vault_credentials_file }}"
+      register: vault_credentials_slurp
+
+    - name: Fijar las claves de unseal y el token root como variables
+      ansible.builtin.set_fact:
+        vault_unseal_keys: "{{ (vault_credentials_slurp.content | b64decode | from_json).unseal_keys_b64[:vault_unseal_threshold | int] }}"
+        vault_root_token: "{{ (vault_credentials_slurp.content | b64decode | from_json).root_token }}"
+      no_log: true
+
+    # vault-0 es el nodo que arranca (o ya tiene) el clúster Raft, así que se
+    # puede desellar de inmediato.
+    - name: Desellar vault-0
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec vault-0 --
+        vault operator unseal {{ item }}
+      loop: "{{ vault_unseal_keys }}"
+      changed_when: true
+      no_log: true
+
+    # vault-1 y vault-2 se unen al clúster Raft en segundo plano en cuanto
+    # arrancan (el propio chart configura `retry_join` con las 3 direcciones
+    # del StatefulSet) — pero ese "join" solo puede completarse una vez
+    # vault-0 (el líder) está desellado, y tarda unos segundos en producirse.
+    # Intentar el unseal ANTES de que el join termine falla con
+    # "Vault is not initialized" (confirmado en vivo, condición de carrera).
+    # Se espera explícitamente a que cada Pod reporte `initialized: true`
+    # antes de intentar desellarlo.
+    - name: Esperar a que vault-1 y vault-2 terminen de unirse al clúster Raft
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec {{ item }} --
+        vault status -format=json
+      loop:
+        - vault-1
+        - vault-2
+      register: vault_join_status
+      until: (vault_join_status.stdout | from_json).initialized
+      retries: 24
+      delay: 5
+      changed_when: false
+      failed_when: false
+
+    - name: Desellar vault-1 y vault-2
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec {{ item.0 }} --
+        vault operator unseal {{ item.1 }}
+      loop: "{{ ['vault-1', 'vault-2'] | product(vault_unseal_keys) | list }}"
+      changed_when: true
+      no_log: true
+
+    - name: Comprobar que los 3 Pods de Vault ya no están sellados
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec {{ item }} --
+        vault status -format=json
+      loop:
+        - vault-0
+        - vault-1
+        - vault-2
+      register: vault_final_status
+      changed_when: false
+      failed_when: (vault_final_status.stdout | from_json).sealed
+
+    - name: Comprobar los miembros del clúster Raft (vía vault-0, con el token root)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec vault-0 --
+        env VAULT_TOKEN={{ vault_root_token }} vault operator raft list-peers -format=json
+      register: vault_raft_peers
+      changed_when: false
+      no_log: true
+      failed_when: (vault_raft_peers.stdout | from_json).data.config.servers | length != 3
+
+    - name: Mostrar resumen de la inicialización de Vault
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡VAULT INICIALIZADO Y DESELLADO CON ÉXITO! (clúster Raft de 3 nodos)"
+          - "  "
+          - "  Claves de unseal y token root guardados de forma segura en:"
+          - "  {{ vault_credentials_file }}"
+          - "  "
+          - "  NOTA: en producción, este paso manual (Shamir) se sustituiría por"
+          - "  auto-unseal vía KMS de un proveedor cloud (AWS/GCP/Azure) — no"
+          - "  implementado aquí por requerir credenciales cloud reales."
+          - "════════════════════════════════════════════════════════════════"

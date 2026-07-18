@@ -1,0 +1,96 @@
+---
+- name: Desplegar el clúster Percona XtraDB Cluster (Galera)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    pxc_release_name: pxc-db
+  tasks:
+    - name: Instalar el clúster PXC vía el chart pxc-db de Percona
+      kubernetes.core.helm:
+        name: "{{ pxc_release_name }}"
+        chart_ref: percona/pxc-db
+        chart_version: "{{ percona_pxc_chart_version }}"
+        release_namespace: pxc
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 10m0s
+        values:
+          crVersion: "{{ percona_pxc_chart_version }}"
+          pxc:
+            size: "{{ pxc_cluster_size }}"
+            image:
+              tag: "{{ percona_pxc_image_tag }}"
+            resources:
+              requests:
+                memory: 700M
+                cpu: 400m
+            persistence:
+              enabled: true
+              storageClass: longhorn
+              size: "{{ pxc_storage_size }}"
+          haproxy:
+            enabled: true
+            size: "{{ pxc_haproxy_size }}"
+            image: "percona/haproxy:{{ percona_pxc_haproxy_image_tag }}"
+            resources:
+              requests:
+                memory: 256M
+                cpu: 200m
+            exposePrimary:
+              type: LoadBalancer
+          backup:
+            enabled: false
+
+    - name: Esperar a que el clúster PXC alcance el estado "ready"
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc get pxc {{ pxc_release_name }} -o jsonpath={.status.state}
+      register: pxc_status
+      until: pxc_status.stdout | trim == "ready"
+      retries: 60
+      delay: 15
+      changed_when: false
+
+    - name: Esperar a que el Service LoadBalancer de HAProxy reciba una IP del LB-IPAM de Cilium
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc get svc {{ pxc_release_name }}-haproxy
+        -o jsonpath={.status.loadBalancer.ingress[0].ip}
+      register: pxc_lb_ip
+      until: pxc_lb_ip.stdout | trim | length > 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Comprobar si ya existe el archivo de la contraseña root de PXC
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/pxc_root_password.txt"
+      register: pxc_password_file_status
+
+    - name: Leer la contraseña root generada automáticamente por el operador
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc get secret {{ pxc_release_name }}-secrets
+        -o jsonpath={.data.root}
+      register: pxc_root_password_b64
+      changed_when: false
+      when: not pxc_password_file_status.stat.exists
+
+    - name: Guardar la contraseña root de PXC en un archivo local
+      ansible.builtin.copy:
+        content: "{{ pxc_root_password_b64.stdout | b64decode }}"
+        dest: "{{ playbook_dir }}/pxc_root_password.txt"
+        mode: "0600"
+      when: not pxc_password_file_status.stat.exists
+
+    - name: Mostrar datos de conexión al clúster PXC
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡CLÚSTER PERCONA XTRADB (GALERA) DESPLEGADO CON ÉXITO!"
+          - "  "
+          - "  Usuario: root   /   Contraseña guardada de forma segura en:"
+          - "  {{ playbook_dir }}/pxc_root_password.txt"
+          - "  "
+          - "  Conexión interna (desde dentro del clúster): {{ pxc_release_name }}-haproxy.pxc.svc:3306"
+          - "  Conexión externa (IP propia asignada por el LB-IPAM de Cilium):"
+          - "  mysql -h {{ pxc_lb_ip.stdout }} -u root -p"
+          - "════════════════════════════════════════════════════════════════"

@@ -1,0 +1,191 @@
+---
+# Despliega una app de ejemplo que consume una credencial MySQL DINÁMICA de
+# Vault a través del CSI Provider: el Pod se autentica solo con su
+# ServiceAccount (sin ninguna contraseña de por medio) y Vault le entrega un
+# usuario/contraseña recién generado, montado como archivo — nunca pasa por
+# un Secret nativo de Kubernetes.
+#
+# La verificación es real de principio a fin (no solo "el Pod arrancó"):
+# lee la credencial montada, se conecta de verdad a PXC con ella, confirma
+# que el usuario efímero existe en PXC, y espera a que expire su TTL corto
+# para confirmar DOS cosas: que Vault lo revoca automáticamente (ya no
+# existe en PXC) y que una conexión con esa misma credencial ahora falla.
+- name: Desplegar la app de ejemplo y verificar el ciclo de vida completo de la credencial dinámica
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    vault_demo_namespace: vault-demo
+    vault_demo_service_account: vault-demo-app
+    demo_pod_name: demo-app
+    pxc_release_name: pxc-db
+    # Reutiliza la imagen del propio PXC (ya está en caché en el clúster,
+    # trae el cliente `mysql` incluido) — evita descargar una imagen nueva
+    # solo para este Pod de demostración.
+    demo_pod_image: "percona/percona-xtradb-cluster:{{ percona_pxc_image_tag }}"
+  tasks:
+    - name: Crear el SecretProviderClass que apunta a la credencial dinámica de app-role
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: secrets-store.csi.x-k8s.io/v1
+          kind: SecretProviderClass
+          metadata:
+            name: vault-db-creds
+            namespace: "{{ vault_demo_namespace }}"
+          spec:
+            provider: vault
+            parameters:
+              vaultAddress: "http://vault.vault.svc:8200"
+              roleName: "app-role"
+              objects: |
+                - objectName: "username"
+                  secretPath: "database/creds/app-role"
+                  secretKey: "username"
+                - objectName: "password"
+                  secretPath: "database/creds/app-role"
+                  secretKey: "password"
+
+    # El CSI Driver monta la credencial UNA sola vez, al crear el Pod (la
+    # rotación automática está desactivada, ver 15_instalar_csi_driver.yml)
+    # — y el spec de un Pod es inmutable, así que `state: present` sobre un
+    # Pod ya existente de una ejecución anterior NO lo recrea. Sin este
+    # borrado explícito, una segunda ejecución reutilizaría la credencial ya
+    # expirada/revocada de la vez anterior, rompiendo la idempotencia (bug
+    # real encontrado y corregido en este mismo laboratorio).
+    - name: Eliminar el Pod de la app de ejemplo si ya existe (para forzar un montaje fresco de la credencial)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: absent
+        api_version: v1
+        kind: Pod
+        name: "{{ demo_pod_name }}"
+        namespace: "{{ vault_demo_namespace }}"
+        wait: true
+        wait_timeout: 60
+
+    - name: Desplegar el Pod de la app de ejemplo (monta la credencial vía CSI)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "{{ demo_pod_name }}"
+            namespace: "{{ vault_demo_namespace }}"
+          spec:
+            serviceAccountName: "{{ vault_demo_service_account }}"
+            containers:
+              - name: demo-app
+                image: "{{ demo_pod_image }}"
+                command: ["sleep", "infinity"]
+                volumeMounts:
+                  - name: secrets-store
+                    mountPath: "/mnt/secrets-store"
+                    readOnly: true
+            volumes:
+              - name: secrets-store
+                csi:
+                  driver: secrets-store.csi.k8s.io
+                  readOnly: true
+                  volumeAttributes:
+                    secretProviderClass: vault-db-creds
+
+    - name: Esperar a que el Pod de la app de ejemplo esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_demo_namespace }} wait pod/{{ demo_pod_name }}
+        --for=condition=Ready --timeout=120s
+      changed_when: false
+
+    - name: Leer el usuario MySQL dinámico montado en el Pod
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_demo_namespace }} exec {{ demo_pod_name }} --
+        cat /mnt/secrets-store/username
+      register: demo_db_username
+      changed_when: false
+
+    # Vault genera los nombres de usuario con el prefijo "v-<auth>-<role>-",
+    # nunca un nombre fijo — es la prueba más directa de que es una
+    # credencial recién creada, no una contraseña estática reutilizada.
+    - name: Confirmar que el usuario tiene pinta de credencial generada por Vault
+      ansible.builtin.fail:
+        msg: "El usuario '{{ demo_db_username.stdout }}' no tiene el prefijo esperado de Vault (v-...)."
+      when: demo_db_username.stdout is not search('^v-')
+
+    - name: Conectar a PXC con la credencial dinámica montada y confirmar que funciona
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_demo_namespace }} exec {{ demo_pod_name }} --
+        sh -c 'mysql -h {{ pxc_release_name }}-haproxy.pxc.svc -u"$(cat /mnt/secrets-store/username)" -p"$(cat /mnt/secrets-store/password)" -N -B -e "SELECT valor FROM demo.prueba WHERE id=1;"'
+      register: demo_db_connection
+      changed_when: false
+      no_log: true
+      failed_when: "'secreto-dinamico-ok' not in demo_db_connection.stdout"
+
+    - name: Leer la contraseña root de PXC desde el archivo local (para inspeccionar mysql.user)
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/pxc_root_password.txt"
+      register: pxc_root_password_slurp
+
+    - name: Fijar la contraseña root de PXC como variable
+      ansible.builtin.set_fact:
+        pxc_root_password: "{{ pxc_root_password_slurp.content | b64decode | trim }}"
+      no_log: true
+
+    - name: Confirmar que el usuario efímero existe de verdad en PXC (vía el usuario root)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc exec {{ pxc_release_name }}-pxc-0 -c pxc --
+        mysql -uroot -p{{ pxc_root_password }} -N -B
+        -e "SELECT COUNT(*) FROM mysql.user WHERE User='{{ demo_db_username.stdout }}';"
+      register: demo_user_exists_before
+      changed_when: false
+      no_log: true
+      failed_when: demo_user_exists_before.stdout | trim != "1"
+
+    - name: Mostrar resumen previo a la expiración
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  CREDENCIAL DINÁMICA GENERADA Y VERIFICADA: {{ demo_db_username.stdout }}"
+          - "  Conexión a PXC con esta credencial: OK."
+          - "  Usuario confirmado en mysql.user de PXC: OK."
+          - "  "
+          - "  Esperando a que expire su TTL ({{ vault_db_role_default_ttl }}) y Vault la revoque solo..."
+          - "════════════════════════════════════════════════════════════════"
+
+    # No se fuerza `vault lease revoke`: se espera a la expiración natural
+    # del lease para demostrar la revocación AUTOMÁTICA real, que es
+    # precisamente el objetivo pedagógico central de este laboratorio.
+    - name: Esperar a que Vault revoque automáticamente el usuario efímero al expirar su TTL
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n pxc exec {{ pxc_release_name }}-pxc-0 -c pxc --
+        mysql -uroot -p{{ pxc_root_password }} -N -B
+        -e "SELECT COUNT(*) FROM mysql.user WHERE User='{{ demo_db_username.stdout }}';"
+      register: demo_user_exists_after
+      until: demo_user_exists_after.stdout | trim == "0"
+      retries: 30
+      delay: 15
+      changed_when: false
+      no_log: true
+
+    - name: Confirmar que la conexión con la credencial ya revocada ahora falla
+      ansible.builtin.shell: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_demo_namespace }} exec {{ demo_pod_name }} --
+        sh -c 'mysql -h {{ pxc_release_name }}-haproxy.pxc.svc -u"$(cat /mnt/secrets-store/username)" -p"$(cat /mnt/secrets-store/password)" -e "SELECT 1;"'
+      register: demo_db_connection_after_revoke
+      changed_when: false
+      no_log: true
+      failed_when: demo_db_connection_after_revoke.rc == 0
+
+    - name: Mostrar resumen final de la demostración
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡SECRETO DINÁMICO REVOCADO AUTOMÁTICAMENTE POR VAULT, CONFIRMADO!"
+          - "  "
+          - "  El usuario {{ demo_db_username.stdout }} ya NO existe en PXC,"
+          - "  y una conexión con esa misma credencial ahora falla."
+          - "  Ninguna contraseña estática se guardó nunca en un Secret de Kubernetes."
+          - "════════════════════════════════════════════════════════════════"

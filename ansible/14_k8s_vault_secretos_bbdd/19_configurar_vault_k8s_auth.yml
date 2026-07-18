@@ -1,0 +1,104 @@
+---
+# Configura el método de autenticación Kubernetes de Vault: los Pods se
+# autentican con el JWT de su propio ServiceAccount, sin ninguna credencial
+# hardcodeada. Crea también la policy que limita qué puede leer la app de
+# ejemplo (solo la ruta de credenciales dinámicas de MySQL, nada más) y el
+# namespace/ServiceAccount que usará esa app en el playbook 20.
+- name: Configurar el método de autenticación Kubernetes de Vault y su policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    vault_namespace: vault
+    vault_demo_namespace: vault-demo
+    vault_demo_service_account: vault-demo-app
+    vault_credentials_file: "{{ playbook_dir }}/vault_credentials.json"
+  tasks:
+    - name: Leer las credenciales de Vault desde el archivo local
+      ansible.builtin.slurp:
+        src: "{{ vault_credentials_file }}"
+      register: vault_credentials_slurp
+
+    - name: Fijar el token root como variable
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ (vault_credentials_slurp.content | b64decode | from_json).root_token }}"
+      no_log: true
+
+    - name: Crear namespace vault-demo si no existe (para la app de ejemplo del playbook 20)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ vault_demo_namespace }}"
+
+    - name: Crear el ServiceAccount que usará la app de ejemplo
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: "{{ vault_demo_service_account }}"
+            namespace: "{{ vault_demo_namespace }}"
+
+    - name: Comprobar si el método de autenticación Kubernetes ya está habilitado
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec vault-0 --
+        env VAULT_TOKEN={{ vault_root_token }} vault auth list -format=json
+      register: vault_auth_list
+      changed_when: false
+      no_log: true
+
+    - name: Habilitar el método de autenticación Kubernetes
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec vault-0 --
+        env VAULT_TOKEN={{ vault_root_token }} vault auth enable kubernetes
+      when: "'kubernetes/' not in (vault_auth_list.stdout | from_json)"
+      changed_when: true
+
+    # El propio Pod de Vault ya tiene, vía su ServiceAccount, un JWT y el CA
+    # del API server montados automáticamente por Kubernetes — se usan esos
+    # mismos, sin necesidad de generar ni copiar ninguna credencial aparte.
+    - name: Configurar el método de autenticación Kubernetes (apuntando al propio API server del clúster)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec vault-0 --
+        env VAULT_TOKEN={{ vault_root_token }} vault write auth/kubernetes/config
+        kubernetes_host="https://kubernetes.default.svc"
+        kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        token_reviewer_jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token
+      changed_when: true
+
+    - name: Crear la policy que limita el acceso a la app de ejemplo (solo lectura de credenciales dinámicas)
+      ansible.builtin.shell: |
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec -i vault-0 -- \
+          env VAULT_TOKEN={{ vault_root_token }} vault policy write app-db-policy - <<'EOF'
+        path "database/creds/app-role" {
+          capabilities = ["read"]
+        }
+        EOF
+      changed_when: true
+
+    - name: Vincular el ServiceAccount de la app de ejemplo a la policy, vía un role de Kubernetes auth
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} exec vault-0 --
+        env VAULT_TOKEN={{ vault_root_token }} vault write auth/kubernetes/role/app-role
+        bound_service_account_names={{ vault_demo_service_account }}
+        bound_service_account_namespaces={{ vault_demo_namespace }}
+        policies=app-db-policy
+        ttl=1h
+      changed_when: true
+
+    - name: Mostrar resumen de la configuración de autenticación
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡AUTENTICACIÓN KUBERNETES Y POLICY DE VAULT CONFIGURADAS!"
+          - "  "
+          - "  ServiceAccount autorizado: {{ vault_demo_service_account }} (ns {{ vault_demo_namespace }})"
+          - "  Policy: app-db-policy (solo lectura de database/creds/app-role)"
+          - "════════════════════════════════════════════════════════════════"

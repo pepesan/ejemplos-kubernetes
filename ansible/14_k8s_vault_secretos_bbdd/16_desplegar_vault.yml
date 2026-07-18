@@ -1,0 +1,138 @@
+---
+# Despliega HashiCorp Vault en modo HA con almacenamiento Raft integrado (sin
+# depender de Consul), más el CSI Provider de Vault (como DaemonSet, vía
+# `csi.enabled: true` del propio chart — no hace falta ningún chart aparte).
+#
+# El "Vault Agent Injector" (el patrón más antiguo, basado en sidecars) se
+# desactiva explícitamente (`injector.enabled: false`): este laboratorio usa
+# el CSI Provider en su lugar, más representativo de cómo se hace hoy en
+# producción (ver PLAN.md, nota de alcance del laboratorio 14).
+- name: Desplegar HashiCorp Vault en modo HA (Raft)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    vault_namespace: vault
+    vault_release_name: vault
+  tasks:
+    - name: Crear namespace vault si no existe
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ vault_namespace }}"
+
+    - name: Agregar el repositorio de HashiCorp a Helm
+      kubernetes.core.helm_repository:
+        name: hashicorp
+        repo_url: https://helm.releases.hashicorp.com
+
+    - name: Instalar HashiCorp Vault vía Helm (HA, Raft, CSI Provider)
+      kubernetes.core.helm:
+        name: "{{ vault_release_name }}"
+        chart_ref: hashicorp/vault
+        chart_version: "{{ vault_chart_version }}"
+        release_namespace: "{{ vault_namespace }}"
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 5m0s
+        values:
+          injector:
+            enabled: false
+          server:
+            image:
+              tag: "{{ vault_image_tag }}"
+            resources:
+              requests:
+                cpu: 250m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+            dataStorage:
+              enabled: true
+              storageClass: longhorn
+              size: 2Gi
+            ha:
+              enabled: true
+              replicas: 3
+              raft:
+                enabled: true
+                setNodeId: true
+                # El valor por defecto del chart NO incluye "retry_join" en
+                # el bloque storage "raft" — sin él, cada Pod monta su propio
+                # almacenamiento Raft aislado y vault-1/vault-2 nunca llegan
+                # a unirse al clúster del líder (se quedan "initialized:
+                # false" para siempre, confirmado en vivo). Hay que
+                # declararlo a mano, apuntando a los 3 Pods del StatefulSet.
+                config: |
+                  ui = true
+
+                  listener "tcp" {
+                    tls_disable = 1
+                    address = "[::]:8200"
+                    cluster_address = "[::]:8201"
+                  }
+
+                  storage "raft" {
+                    path = "/vault/data"
+
+                    retry_join {
+                      leader_api_addr = "http://vault-0.vault-internal:8200"
+                    }
+                    retry_join {
+                      leader_api_addr = "http://vault-1.vault-internal:8200"
+                    }
+                    retry_join {
+                      leader_api_addr = "http://vault-2.vault-internal:8200"
+                    }
+                  }
+
+                  service_registration "kubernetes" {}
+          csi:
+            enabled: true
+            resources:
+              requests:
+                cpu: 50m
+                memory: 128Mi
+              limits:
+                cpu: 100m
+                memory: 256Mi
+          # Sin TLS entre Pods de Vault ni en el listener del cliente:
+          # simplificación deliberada para este laboratorio (gestionar
+          # certificados no añade valor pedagógico aquí, mismo criterio ya
+          # aplicado a otras simplificaciones de la serie, p.ej. backups
+          # deshabilitados en los escenarios de BBDD).
+          global:
+            tlsDisable: true
+
+    - name: Esperar a que los 3 Pods de Vault estén creados (Running, aún sellados)
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} get pods
+        -l app.kubernetes.io/name=vault,component=server
+        -o 'jsonpath={.items[*].status.phase}'
+      register: vault_pods_phase
+      until: >
+        vault_pods_phase.stdout.split() | length == 3 and
+        (vault_pods_phase.stdout.split() | select('equalto', 'Running') | list | length) == 3
+      retries: 40
+      delay: 10
+      changed_when: false
+
+    - name: Esperar a que el DaemonSet del CSI Provider de Vault esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ vault_namespace }} rollout status daemonset/vault-csi-provider --timeout=120s
+      changed_when: false
+
+    - name: Mostrar resumen del despliegue de Vault
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡HASHICORP VAULT (HA, RAFT) DESPLEGADO CON ÉXITO!"
+          - "  "
+          - "  Los 3 Pods están arriba pero SELLADOS (esto es normal)."
+          - "  Siguiente paso: ansible-playbook 17_inicializar_vault.yml"
+          - "════════════════════════════════════════════════════════════════"

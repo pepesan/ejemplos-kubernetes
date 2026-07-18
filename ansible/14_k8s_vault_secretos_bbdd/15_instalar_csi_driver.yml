@@ -1,0 +1,46 @@
+---
+# El "Secrets Store CSI Driver" es el componente genérico (independiente de
+# Vault) que permite montar secretos de un proveedor externo como un volumen
+# normal dentro de un Pod. El componente específico de Vault (el "CSI
+# Provider") lo despliega el propio chart de Vault más adelante
+# (16_desplegar_vault.yml, `csi.enabled: true`) — aquí solo se instala el
+# driver genérico del que depende.
+- name: Instalar el Secrets Store CSI Driver
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Agregar el repositorio de secrets-store-csi-driver a Helm
+      kubernetes.core.helm_repository:
+        name: secrets-store-csi-driver
+        repo_url: https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
+
+    - name: Instalar el Secrets Store CSI Driver vía Helm
+      kubernetes.core.helm:
+        name: csi-secrets-store
+        chart_ref: secrets-store-csi-driver/secrets-store-csi-driver
+        chart_version: "{{ secrets_store_csi_driver_chart_version }}"
+        release_namespace: kube-system
+        kubeconfig: "{{ kubeconfig_path }}"
+        timeout: 5m0s
+        values:
+          # Deliberadamente en false: el objetivo de este laboratorio es que
+          # el secreto NUNCA se materialice como un Secret nativo de
+          # Kubernetes (ni por tanto en etcd), solo como archivo montado
+          # directamente en el Pod que lo necesita.
+          syncSecret:
+            enabled: false
+
+    - name: Esperar a que el DaemonSet del CSI Driver esté listo
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n kube-system rollout status daemonset/csi-secrets-store-secrets-store-csi-driver --timeout=180s
+      changed_when: false
+
+    - name: Mostrar resumen del despliegue del CSI Driver
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡SECRETS STORE CSI DRIVER DESPLEGADO CON ÉXITO!"
+          - "════════════════════════════════════════════════════════════════"

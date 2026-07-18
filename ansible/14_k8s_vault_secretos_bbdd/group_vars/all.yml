@@ -1,0 +1,74 @@
+---
+# Conexión SSH: acceso como root sin contraseña (clave inyectada en la imagen base)
+ansible_user: root
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+# Parámetros de los nodos virtuales LXD (La plantilla 'k8s-template' debe estar basada en Ubuntu 26.04)
+lxd_image: k8s-template
+lxd_network: lxdbr0
+
+# Módulos de kernel necesarios para Kubernetes/CNI en LXD
+lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
+
+# Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
+k8s_major_version: "v1.36"
+k8s_pod_network_cidr: "10.244.0.0/16" # CIDR de pods, gestionado por Cilium (modo cluster-pool)
+
+# VIP de alta disponibilidad del plano de control (kube-vip) — igual que en el 02
+k8s_vip_address: "10.207.154.49"
+k8s_vip_port: 6443
+k8s_vip_interface: enp5s0
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+
+# Cilium sustituye a Flannel como CNI (igual que en el escenario 08) y provee
+# su LoadBalancer L2 nativo (LB-IPAM + L2Announcement) para exponer servicios
+# con un Service tipo LoadBalancer normal, sin Gateway API ni MetalLB.
+cilium_version: "1.19.5"
+cilium_lb_ip_range: "10.207.154.70-10.207.154.80"
+
+# Versión del chart de Percona Operator for MySQL (pxc-operator/pxc-db) —
+# mismo clúster PXC que en el escenario 10, aquí como "base de datos objetivo"
+# de los secretos dinámicos de Vault, no como protagonista del laboratorio.
+percona_pxc_chart_version: "1.20.0"
+percona_pxc_image_tag: "8.4.7-7.1"
+percona_pxc_haproxy_image_tag: "2.8.18-1"
+pxc_cluster_size: 3
+pxc_haproxy_size: 2
+pxc_storage_size: "3Gi"
+
+# Versión del chart de Headlamp
+headlamp_chart_version: "0.43.0"
+
+# Versión del chart de Longhorn
+longhorn_chart_version: "1.12.0"
+
+# Versión del chart oficial de HashiCorp Vault. Se descarta deliberadamente
+# la 0.33.0/0.34.0 (imagen Vault 2.0.x, publicada este mismo mes) en favor de
+# la última versión 1.x madura — un salto de versión MAYOR recién publicado
+# es justo el tipo de "bleeding edge" que ya ha dado sorpresas en esta serie
+# de laboratorios (incompatibilidad kernel/glibc con MongoDB 8.x en el
+# escenario 13, Kubernetes 1.36 recién publicado). Comprobado en vivo con
+# `helm search repo hashicorp/vault --versions`, no de memoria.
+vault_chart_version: "0.32.0"
+vault_image_tag: "1.21.2"
+
+# Versión del chart del driver CSI genérico (independiente de Vault). El
+# propio chart de Vault despliega su "CSI Provider" (el componente
+# específico de Vault) como DaemonSet vía `csi.enabled: true` — no hace
+# falta instalar ningún chart adicional para eso.
+secrets_store_csi_driver_chart_version: "1.6.0"
+
+# Parámetros de inicialización de Vault (Shamir por defecto: se generan
+# `vault_unseal_shares` fragmentos de la clave maestra, y hacen falta
+# `vault_unseal_threshold` de ellos para desellar cada Pod). En producción
+# esto se sustituiría por auto-unseal vía KMS de un proveedor cloud (AWS
+# KMS/GCP Cloud KMS/Azure Key Vault) — no implementado aquí porque requiere
+# credenciales cloud reales, fuera del alcance de un laboratorio local en LXD.
+vault_unseal_shares: 5
+vault_unseal_threshold: 3
+
+# TTL de las credenciales dinámicas de MySQL generadas por Vault:
+# deliberadamente cortos para poder demostrar la expiración y revocación
+# automática del lease sin tener que esperar horas.
+vault_db_role_default_ttl: "2m"
+vault_db_role_max_ttl: "10m"
