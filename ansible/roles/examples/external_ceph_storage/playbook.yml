@@ -1,0 +1,54 @@
+---
+# Two genuinely independent clusters, wired together by ceph-csi:
+#
+#   ansible-playbook -i inventory.ini playbook.yml
+#
+# Uncomment the lxd_host_bootstrap play below on a genuinely fresh LXD host.
+
+# - name: Prepare the LXD host
+#   hosts: localhost
+#   become: true
+#   roles:
+#     - lxd_host_bootstrap
+
+- name: Provision the Ceph cluster's VMs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: ceph_nodes
+  roles:
+    - lxd_machine_provision
+
+- name: Provision the Kubernetes cluster's VM(s)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: k8s_nodes
+  roles:
+    - lxd_machine_provision
+
+- name: Bootstrap the standalone Ceph cluster
+  hosts: ceph_monitors:ceph_osds
+  roles:
+    - ceph_external_cluster
+
+- name: Bootstrap the Kubernetes cluster
+  hosts: k8s_nodes
+  vars:
+    k8s_vip_address: "10.207.154.75"
+    k8s_vip_interface: enp5s0
+    k8s_ha_cluster_cni: flannel
+    k8s_ha_cluster_csi: none
+    k8s_ha_cluster_headlamp_enabled: true
+    k8s_ha_cluster_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_ha_cluster
+
+- name: Wire the k8s cluster to the external Ceph cluster
+  hosts: ceph_monitors:localhost
+  vars:
+    k8s_ceph_external_csi_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_ceph_external_csi

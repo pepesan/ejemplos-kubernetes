@@ -1,0 +1,18 @@
+---
+# Adds the [new_workers] host (pxc-worker3) to the cluster brought up by
+# playbook.yml. gather_facts: false is required here — the new node doesn't
+# exist yet at play start (this role's own tasks/add.yml provisions it via
+# lxd_machine_provision), and implicit fact gathering would try to connect
+# to it before that happens and fail UNREACHABLE. See k8s_node_scale_cycle's
+# own README for why.
+#
+#   ansible-playbook -i inventory.ini scale_add_node.yml
+
+- name: Add a new node to the cluster
+  hosts: new_workers:first_manager:localhost
+  gather_facts: false
+  vars:
+    k8s_node_scale_cycle_operation: add
+    k8s_node_scale_cycle_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_node_scale_cycle

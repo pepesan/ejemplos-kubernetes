@@ -1,0 +1,50 @@
+---
+# Full stack: LXD host prep -> VM provisioning -> HA k8s cluster with
+# Longhorn -> Percona Operator for MySQL (PXC/Galera). Run in order:
+#
+#   ansible-playbook -i inventory.ini playbook.yml
+#
+# (ANSIBLE_ROLES_PATH must resolve ../.. from here, or run from
+# ansible/roles/ with this file's path — see ../README.md)
+#
+# Uncomment the lxd_host_bootstrap play below on a genuinely fresh LXD host.
+# Skip it (leave commented) if the host is already prepared — this role is
+# idempotent either way, but bootstrap needs sudo/become and is usually a
+# one-time step you don't want re-running on every cluster rebuild.
+
+# - name: Prepare the LXD host
+#   hosts: localhost
+#   become: true
+#   roles:
+#     - lxd_host_bootstrap
+
+- name: Provision the cluster's VMs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: k8s_nodes
+  roles:
+    - lxd_machine_provision
+
+- name: Bootstrap the HA Kubernetes cluster
+  hosts: k8s_nodes
+  vars:
+    k8s_vip_address: "10.207.154.67"
+    k8s_vip_interface: enp5s0
+    k8s_ha_cluster_cni: flannel
+    k8s_ha_cluster_csi: longhorn
+    k8s_ha_cluster_headlamp_enabled: true
+    k8s_ha_cluster_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_ha_cluster
+
+- name: Install the Percona Operator for MySQL (PXC/Galera)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    db_operator_name: pxc
+    db_operator_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - db_operator

@@ -53,6 +53,17 @@ yet (explicit decision: build the roles standalone first, migrate later).
   2. `k8s_ha_cluster`'s `k8s_tools_debian.yml`/`k8s_tools_redhat.yml` reference a bare `k8s_major_version` var from that role's own `defaults/main.yml` — invisible here since these task files are imported directly by path rather than via invoking the `k8s_ha_cluster` role itself (whose defaults only merge in when the role is actually invoked). Fixed with this role's own `k8s_node_scale_cycle_k8s_major_version` default (same `"v1.36"` pin, kept in sync manually), passed through explicitly on the `import_tasks` call.
   - Passed cleanly end to end (`converge`/`verify`/`destroy`) after both fixes, no leftover VMs. No native Molecule `idempotence` step for this scenario — `converge` runs a full add-THEN-remove cycle, and both halves perform genuine create/destroy actions by design (provisioning and later destroying the same LXD VM, joining and later deleting the same k8s Node), so every run always reports changed; same one-shot treatment other destructive playbooks in this repo already get.
 
+## Examples (`ansible/roles/examples/`)
+
+Added 2026-07-18, per explicit user request for a dedicated place to show roles combined into
+complete, runnable setups, beyond each role's own README "Example Playbook" snippet (which is
+illustrative only — a `hosts:`/`roles:` fragment, not a full inventory). Two examples:
+`full_cluster_pxc/` (`lxd_host_bootstrap` → `lxd_machine_provision` → `k8s_ha_cluster` → `db_operator`
+→ `k8s_node_scale_cycle`) and `external_ceph_storage/` (`lxd_machine_provision` ×2 →
+`ceph_external_cluster` → `k8s_ha_cluster` → `k8s_ceph_external_csi`). Not covered by Molecule — these
+are meant to be copied/adapted by a human (real IPs, real capacity), not run unmodified in CI; every
+role they compose is already independently validated by its own Molecule scenario(s) above.
+
 ### Ideas raised, not yet scheduled
 
 - **More `k8s_ha_cluster_cni` options**: `kubespray` supports 6 CNIs (Calico, Cilium, Flannel, kube-ovn, kube-router, Multus) against our current 2 (Flannel, Cilium). Adding Calico/kube-router as further `tasks/cni/<name>.yml` options was raised as a future possibility — deliberately not doing it now, current 2 stay as-is.

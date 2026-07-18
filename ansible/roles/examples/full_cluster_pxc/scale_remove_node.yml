@@ -1,0 +1,17 @@
+---
+# Removes the node added by scale_add_node.yml. Reminder from
+# k8s_node_scale_cycle's own README: app-level scale-down (e.g. reducing a
+# PXC cluster's size, checking wsrep_* health) is out of scope for this
+# role and must happen separately, before this playbook, if the node being
+# removed is actually running a PXC replica.
+#
+#   ansible-playbook -i inventory.ini scale_remove_node.yml
+
+- name: Remove a node from the cluster
+  hosts: new_workers:localhost
+  vars:
+    k8s_node_scale_cycle_operation: remove
+    k8s_node_scale_cycle_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    k8s_node_scale_cycle_nodes_to_remove: "{{ groups['new_workers'] }}"
+  roles:
+    - k8s_node_scale_cycle

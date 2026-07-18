@@ -12,6 +12,12 @@ Standalone, reusable Ansible roles extracted from the logic duplicated across th
 
 See each role's own `README.md` for its full variable reference, usage example and testing instructions.
 
+## Examples
+
+See [`examples/`](examples/) for complete, runnable playbooks combining multiple roles (a full HA
+cluster with Longhorn + a Percona operator + node add/remove; two independent clusters wired together
+via external Ceph) — beyond the minimal per-role snippet each role's own README shows.
+
 ## Backlog and status
 
 See [`PLAN.md`](PLAN.md) for the full backlog of planned roles, validation status of the ones already implemented, and notes from reviewing similar published roles.
