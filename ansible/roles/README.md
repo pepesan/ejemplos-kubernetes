@@ -1,0 +1,12 @@
+# Ansible Roles
+
+Standalone, reusable Ansible roles extracted from the logic duplicated across the `ansible/base/` labs. They are not (yet) wired into any lab — each is self-contained, with its own Molecule test scenario(s). Written entirely in English (code, comments, documentation and tests), unlike the Spanish-language labs in `ansible/base/`.
+
+- [`lxd_host_bootstrap`](lxd_host_bootstrap/): prepares a host to run the `ansible/base/` labs — installs LXD, `kubectl` and `helm`, initializes LXD's network/storage/profile, and imports the base VM image every lab instance is cloned from.
+- [`lxd_machine_provision`](lxd_machine_provision/): creates LXD instances (virtual machines or containers, selectable per group or per host) for a given inventory group, waits for them to become reachable, and injects the host's SSH public key.
+
+See each role's own `README.md` for its full variable reference, usage example and testing instructions.
+
+## Backlog and status
+
+See [`PLAN.md`](PLAN.md) for the full backlog of planned roles, validation status of the ones already implemented, and notes from reviewing similar published roles.
