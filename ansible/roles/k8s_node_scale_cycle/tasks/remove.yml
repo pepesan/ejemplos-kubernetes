@@ -1,0 +1,107 @@
+---
+# Ports the generic (non-PXC-specific) portion of
+# ansible/base/10_k8s_percona_mysql_pxc/17_eliminar_nodos.yml — the Longhorn
+# instance-manager PDB workaround plus the drain/reset/delete/destroy
+# sequence. App-level scale-down (e.g. reducing a PXC cluster's size,
+# checking wsrep health) is explicitly out of scope here — it must happen
+# separately, before invoking this role, matching the base lab's own
+# sequencing.
+- name: Validate that at least one node is targeted for removal
+  ansible.builtin.fail:
+    msg: >
+      k8s_node_scale_cycle_nodes_to_remove is empty. Set it to a list of node hostnames to
+      remove before running this role with k8s_node_scale_cycle_operation: remove.
+  when: k8s_node_scale_cycle_nodes_to_remove | length == 0
+  delegate_to: localhost
+  run_once: true
+
+- name: Disable Longhorn scheduling on the nodes being removed
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_node_scale_cycle_kubeconfig_path }}
+    patch nodes.longhorn.io {{ item }} -n longhorn-system --type merge -p '{"spec":{"allowScheduling":false}}'
+  loop: "{{ k8s_node_scale_cycle_nodes_to_remove }}"
+  when: k8s_node_scale_cycle_longhorn_enabled | bool
+  register: k8s_node_scale_cycle_longhorn_disable_out
+  failed_when:
+    - k8s_node_scale_cycle_longhorn_disable_out.rc != 0
+    - "'not found' not in k8s_node_scale_cycle_longhorn_disable_out.stderr | lower"
+  changed_when: k8s_node_scale_cycle_longhorn_disable_out.rc == 0
+  delegate_to: localhost
+  run_once: true
+
+# The real reason this role exists: kubectl drain hangs indefinitely on a
+# Longhorn storage node, because the instance-manager Pod isn't a real
+# DaemonSet and has its own PodDisruptionBudget with 0 allowed disruptions
+# while it manages any volume. Deleting it directly bypasses the PDB, but is
+# only safe once every real replica has actually evacuated the node.
+- name: Wait for all real replicas to evacuate the nodes being removed
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_node_scale_cycle_kubeconfig_path }}
+    get replicas.longhorn.io -n longhorn-system
+    -o jsonpath={.items[?(@.spec.nodeID=="{{ item }}")].metadata.name}
+  loop: "{{ k8s_node_scale_cycle_nodes_to_remove }}"
+  when: k8s_node_scale_cycle_longhorn_enabled | bool
+  register: k8s_node_scale_cycle_longhorn_replicas_check
+  until: k8s_node_scale_cycle_longhorn_replicas_check.stdout | trim | length == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Delete the instance-manager pod on the nodes being removed
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_node_scale_cycle_kubeconfig_path }}
+    delete pods -n longhorn-system
+    --field-selector spec.nodeName={{ item }}
+    -l longhorn.io/component=instance-manager
+    --ignore-not-found --now
+  loop: "{{ k8s_node_scale_cycle_nodes_to_remove }}"
+  when: k8s_node_scale_cycle_longhorn_enabled | bool
+  changed_when: true
+  delegate_to: localhost
+  run_once: true
+
+- name: Drain the nodes being removed
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_node_scale_cycle_kubeconfig_path }}
+    drain {{ item }} --delete-emptydir-data --ignore-daemonsets --force
+  loop: "{{ k8s_node_scale_cycle_nodes_to_remove }}"
+  changed_when: true
+  delegate_to: localhost
+  run_once: true
+
+- name: Reset kubeadm on the nodes being removed
+  ansible.builtin.command: kubeadm reset -f
+  when: inventory_hostname in k8s_node_scale_cycle_nodes_to_remove
+  changed_when: true
+
+- name: Delete the Longhorn node object for the nodes being removed
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_node_scale_cycle_kubeconfig_path }}
+    delete nodes.longhorn.io {{ item }} -n longhorn-system --ignore-not-found
+  loop: "{{ k8s_node_scale_cycle_nodes_to_remove }}"
+  when: k8s_node_scale_cycle_longhorn_enabled | bool
+  changed_when: true
+  delegate_to: localhost
+  run_once: true
+
+- name: Delete the Kubernetes Node object for the nodes being removed
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_node_scale_cycle_kubeconfig_path }}
+    delete node {{ item }} --ignore-not-found
+  loop: "{{ k8s_node_scale_cycle_nodes_to_remove }}"
+  changed_when: true
+  delegate_to: localhost
+  run_once: true
+
+# lxd_machine_provision has no destroy mode — every role's own
+# molecule/*/destroy.yml already tears VMs down directly rather than
+# through a shared role, so this mirrors that same direct approach.
+- name: Destroy the LXD VM for the nodes being removed
+  community.general.lxd_container:
+    name: "{{ item }}"
+    state: absent
+  loop: "{{ k8s_node_scale_cycle_nodes_to_remove }}"
+  delegate_to: localhost
+  run_once: true

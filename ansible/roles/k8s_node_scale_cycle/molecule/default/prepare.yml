@@ -1,0 +1,21 @@
+---
+- name: Provision the base cluster's VMs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: k8s_nodes
+  roles:
+    - lxd_machine_provision
+
+- name: Bootstrap the base Longhorn-backed cluster
+  hosts: k8s_nodes
+  vars:
+    k8s_vip_address: "10.207.154.233"
+    k8s_vip_interface: enp5s0
+    k8s_ha_cluster_cni: flannel
+    k8s_ha_cluster_csi: longhorn
+    k8s_ha_cluster_headlamp_enabled: false
+    k8s_ha_cluster_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_ha_cluster

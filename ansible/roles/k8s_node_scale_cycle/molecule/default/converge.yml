@@ -1,0 +1,23 @@
+---
+- name: Add a new node to the cluster
+  hosts: new_workers:first_manager:localhost
+  # Must be false: the new_workers host(s) don't exist yet at play start
+  # (tasks/add.yml's own lxd_machine_provision step creates them) — with
+  # implicit fact gathering on, Ansible tries to connect to them before any
+  # task runs and fails UNREACHABLE, never reaching the task that would
+  # have created them.
+  gather_facts: false
+  vars:
+    k8s_node_scale_cycle_operation: add
+    k8s_node_scale_cycle_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_node_scale_cycle
+
+- name: Remove the same node from the cluster
+  hosts: new_workers:localhost
+  vars:
+    k8s_node_scale_cycle_operation: remove
+    k8s_node_scale_cycle_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    k8s_node_scale_cycle_nodes_to_remove: "{{ groups['new_workers'] }}"
+  roles:
+    - k8s_node_scale_cycle

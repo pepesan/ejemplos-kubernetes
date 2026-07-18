@@ -1,0 +1,59 @@
+---
+# Ported from ansible/base/03_.../13_integrar_nodo_longhorn.yml. By default
+# every new node is integrated as a STORAGE node; k8s_node_scale_cycle_new_workload_nodes is an
+# opt-out exception list — only nodes listed there explicitly are treated as
+# pure compute (workload) nodes instead.
+- name: Determine workload vs. storage split for the new node(s)
+  ansible.builtin.set_fact:
+    k8s_node_scale_cycle_new_workload_set: >-
+      {{ groups[k8s_node_scale_cycle_new_nodes_group] | intersect(k8s_node_scale_cycle_new_workload_nodes) }}
+    k8s_node_scale_cycle_new_storage_set: >-
+      {{ groups[k8s_node_scale_cycle_new_nodes_group] | difference(k8s_node_scale_cycle_new_workload_nodes) }}
+  delegate_to: localhost
+  run_once: true
+
+- name: Label new workload nodes (opt-out exception)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ k8s_node_scale_cycle_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ item }}"
+        labels:
+          node.longhorn.io/workload-node: "true"
+  loop: "{{ k8s_node_scale_cycle_new_workload_set }}"
+  when: k8s_node_scale_cycle_new_workload_set | length > 0
+  delegate_to: localhost
+  run_once: true
+
+- name: Label new storage nodes (default)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ k8s_node_scale_cycle_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ item }}"
+        labels:
+          node.longhorn.io/storage-node: "true"
+          node.longhorn.io/create-default-disk: "true"
+  loop: "{{ k8s_node_scale_cycle_new_storage_set }}"
+  when: k8s_node_scale_cycle_new_storage_set | length > 0
+  delegate_to: localhost
+  run_once: true
+
+- name: Apply storage taints to new storage nodes
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_node_scale_cycle_kubeconfig_path }} taint node {{ item }} storage-node=true:NoSchedule
+  loop: "{{ k8s_node_scale_cycle_new_storage_set }}"
+  when: k8s_node_scale_cycle_new_storage_set | length > 0
+  register: k8s_node_scale_cycle_taint_out
+  failed_when:
+    - k8s_node_scale_cycle_taint_out.rc != 0
+    - "'already has' not in k8s_node_scale_cycle_taint_out.stderr"
+  changed_when: "'tainted' in k8s_node_scale_cycle_taint_out.stdout"
+  delegate_to: localhost
+  run_once: true

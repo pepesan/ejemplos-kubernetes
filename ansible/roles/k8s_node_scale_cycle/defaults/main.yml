@@ -1,0 +1,39 @@
+---
+# Which operation to perform: add or remove. Selects tasks/add.yml or
+# tasks/remove.yml — same task-file-indexed-by-name convention k8s_ha_cluster
+# uses for its cni/csi selection.
+k8s_node_scale_cycle_operation: add
+
+# Inventory group holding the new node(s) to add. Empty by default — the
+# caller must define it (and the group) before running with operation: add.
+k8s_node_scale_cycle_new_nodes_group: new_workers
+
+# Single-host group: the node that mints fresh kubeadm join tokens.
+k8s_node_scale_cycle_first_manager_group: first_manager
+
+# Admin kubeconfig of the cluster being scaled.
+k8s_node_scale_cycle_kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
+
+# k8s_ha_cluster's own k8s_tools_debian.yml/k8s_tools_redhat.yml reference a
+# bare "k8s_major_version" var from that role's defaults/main.yml — not
+# picked up automatically here since these task files are imported directly
+# by path, not via invoking the k8s_ha_cluster role itself (whose defaults
+# only merge in when the role is actually invoked). Same pin as there, kept
+# in sync manually; override if the cluster being scaled uses a different
+# Kubernetes minor version than k8s_ha_cluster's own default.
+k8s_node_scale_cycle_k8s_major_version: "v1.36"
+
+# Whether to run the Longhorn-specific steps (labeling new nodes on add;
+# the instance-manager PDB workaround before drain on remove). Set to false
+# for clusters that don't use Longhorn.
+k8s_node_scale_cycle_longhorn_enabled: true
+
+# Opt-out list: new nodes listed here are integrated as pure compute
+# (workload) nodes instead of the default (storage). Same convention as
+# k8s_ha_cluster_longhorn_workload_group, generalized to a per-host list
+# since new nodes aren't a static inventory group.
+k8s_node_scale_cycle_new_workload_nodes: []
+
+# List of node hostnames to remove. Empty by default — the caller must set
+# this before running with operation: remove.
+k8s_node_scale_cycle_nodes_to_remove: []

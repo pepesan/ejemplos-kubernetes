@@ -1,0 +1,92 @@
+---
+# Mirrors ansible/base/03_.../12_add_node.yml + 13_integrar_nodo_longhorn.yml, but delegates the
+# VM/SSH lifecycle to lxd_machine_provision (already replicates that exact sequence) and reuses
+# k8s_ha_cluster's own os_prepare/containerd/k8s_tools task files instead of duplicating them.
+# Invoke this role against `hosts: <new_nodes_group>:<first_manager_group>:localhost` — each task
+# below guards itself by group membership, same convention k8s_ha_cluster uses.
+- name: Validate that at least one node is defined in the new-nodes group
+  ansible.builtin.fail:
+    msg: >
+      No nodes found in inventory group '{{ k8s_node_scale_cycle_new_nodes_group }}'. Add at
+      least one host to that group before running this role with
+      k8s_node_scale_cycle_operation: add.
+  when: >
+    k8s_node_scale_cycle_new_nodes_group not in groups or
+    groups[k8s_node_scale_cycle_new_nodes_group] | length == 0
+  delegate_to: localhost
+  run_once: true
+
+- name: Provision the new node's LXD VM
+  ansible.builtin.import_role:
+    name: lxd_machine_provision
+  vars:
+    lxd_machine_provision_group: "{{ k8s_node_scale_cycle_new_nodes_group }}"
+  delegate_to: localhost
+  run_once: true
+
+# Invoking playbooks must run this play with gather_facts: false, since the
+# new node doesn't exist yet at play start (implicit fact gathering would
+# try to connect to it before lxd_machine_provision above ever runs, and
+# fail UNREACHABLE — found live). Gather facts explicitly here instead, now
+# that the VM is up and reachable — containerd.yml/k8s_tools.yml dispatch
+# on ansible_facts.os_family and need them.
+- name: Gather facts on the new node(s)
+  ansible.builtin.setup:
+  when: inventory_hostname in groups[k8s_node_scale_cycle_new_nodes_group]
+
+- name: Prepare the operating system on the new node
+  ansible.builtin.import_tasks: "{{ role_path }}/../k8s_ha_cluster/tasks/os_prepare.yml"
+  vars:
+    k8s_ha_cluster_nodes_group: "{{ k8s_node_scale_cycle_new_nodes_group }}"
+
+- name: Install and configure containerd on the new node
+  ansible.builtin.import_tasks: "{{ role_path }}/../k8s_ha_cluster/tasks/containerd.yml"
+  vars:
+    k8s_ha_cluster_nodes_group: "{{ k8s_node_scale_cycle_new_nodes_group }}"
+
+- name: Install kubeadm/kubelet/kubectl on the new node
+  ansible.builtin.import_tasks: "{{ role_path }}/../k8s_ha_cluster/tasks/k8s_tools.yml"
+  vars:
+    k8s_ha_cluster_nodes_group: "{{ k8s_node_scale_cycle_new_nodes_group }}"
+    k8s_major_version: "{{ k8s_node_scale_cycle_k8s_major_version }}"
+
+# Deliberately NOT reusing k8s_ha_cluster's workers_join.yml here — it reads
+# a join token cached in a local file at initial cluster creation, which is
+# very likely expired (kubeadm tokens are short-lived) by the time a real
+# day-2 scale-up happens. Mint a fresh one instead, used only in-memory.
+- name: Generate a fresh join token on the first manager
+  when: inventory_hostname == groups[k8s_node_scale_cycle_first_manager_group][0]
+  block:
+    - name: Generate the join command
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: k8s_node_scale_cycle_join_command_raw
+      changed_when: false
+
+- name: Join the new node(s) to the cluster
+  when: inventory_hostname in groups[k8s_node_scale_cycle_new_nodes_group]
+  vars:
+    k8s_node_scale_cycle_join_command: >-
+      {{ hostvars[groups[k8s_node_scale_cycle_first_manager_group][0]].k8s_node_scale_cycle_join_command_raw.stdout }}
+  block:
+    - name: Check whether this node already belongs to the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: k8s_node_scale_cycle_kubelet_conf
+
+    - name: Join the new node to the cluster
+      ansible.builtin.command: "{{ k8s_node_scale_cycle_join_command }} --ignore-preflight-errors=SystemVerification,Swap"
+      when: not k8s_node_scale_cycle_kubelet_conf.stat.exists
+      changed_when: true
+
+- name: Wait for the new node(s) to be Ready
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_node_scale_cycle_kubeconfig_path }}
+    wait node/{{ item }} --for=condition=Ready --timeout=180s
+  loop: "{{ groups[k8s_node_scale_cycle_new_nodes_group] }}"
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Integrate the new node(s) into Longhorn
+  ansible.builtin.import_tasks: longhorn_integrate.yml
+  when: k8s_node_scale_cycle_longhorn_enabled | bool

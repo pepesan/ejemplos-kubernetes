@@ -1,0 +1,38 @@
+---
+- name: Verify
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    removed_node: "{{ groups['new_workers'][0] }}"
+  tasks:
+    - name: Check that the original 2 workers (plus manager) are still Ready
+      ansible.builtin.command: "kubectl --kubeconfig={{ kubeconfig_path }} get nodes -o json"
+      register: nodes_out
+      until: >
+        (nodes_out.stdout | from_json)['items'] | length == 3 and
+        (nodes_out.stdout | from_json)['items'] | map(attribute='status.conditions') | map('selectattr', 'type', 'eq', 'Ready') | map('map', attribute='status') | map('first') | unique == ['True']
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Assert exactly the original 3 nodes remain, all Ready
+      ansible.builtin.assert:
+        that:
+          - (nodes_out.stdout | from_json)['items'] | length == 3
+          - removed_node not in (nodes_out.stdout | from_json)['items'] | map(attribute='metadata.name') | list
+        fail_msg: "Cluster doesn't show exactly the original 3 nodes after the add+remove cycle."
+
+    - name: Check that the Longhorn node object for the removed node is gone
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} get nodes.longhorn.io {{ removed_node }} -n longhorn-system
+      register: longhorn_node_check
+      failed_when: longhorn_node_check.rc == 0
+      changed_when: false
+
+    - name: Check that the removed node's LXD VM no longer exists
+      ansible.builtin.command: "lxc info {{ removed_node }}"
+      register: lxc_info_check
+      failed_when: lxc_info_check.rc == 0
+      changed_when: false

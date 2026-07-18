@@ -1,0 +1,26 @@
+---
+galaxy_info:
+  role_name: k8s_node_scale_cycle
+  namespace: ejemplos_kubernetes
+  description: >-
+    Safely adds or removes a node from an already-running k8s_ha_cluster-built cluster.
+    Add: provisions the VM (lxd_machine_provision), reuses k8s_ha_cluster's own OS/containerd/
+    kubeadm-tooling setup, joins it with a freshly-minted token, optionally integrates it into
+    Longhorn. Remove: the Longhorn instance-manager PodDisruptionBudget workaround needed before
+    a kubectl drain can succeed, then drain/kubeadm-reset/delete/destroy. Faithfully extracted
+    from ansible/base/03_k8s_ha_almacenamiento_persistente_longhorn (add/integrate) and
+    ansible/base/10_k8s_percona_mysql_pxc/17_eliminar_nodos.yml (the correct PDB workaround,
+    generic portion only).
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "24.04"
+        - "26.04"
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+
+dependencies: []

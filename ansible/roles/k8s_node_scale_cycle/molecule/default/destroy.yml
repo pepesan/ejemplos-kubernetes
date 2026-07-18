@@ -1,0 +1,17 @@
+---
+- name: Destroy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Delete every base-cluster test VM created by this scenario
+      ansible.builtin.command: "lxc delete --force {{ item }}"
+      loop: "{{ groups['k8s_nodes'] }}"
+      changed_when: true
+      failed_when: false
+
+    - name: Delete the new-node test VM, in case the remove step didn't already
+      ansible.builtin.command: "lxc delete --force {{ item }}"
+      loop: "{{ groups['new_workers'] }}"
+      changed_when: true
+      failed_when: false

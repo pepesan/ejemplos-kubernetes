@@ -1,0 +1,84 @@
+---
+# Real host, "default" driver — this role needs genuine kubeadm/containerd
+# VMs, same reasoning as every other role here. Base cluster: 1 manager + 2
+# workers (3 VMs) — 2 pre-existing workers so verify.yml can confirm the
+# add+remove cycle on a 3rd node didn't collaterally disrupt the rest of the
+# cluster. The 3rd node (new_workers) is provisioned by the role itself
+# (tasks/add.yml -> lxd_machine_provision), not by prepare.yml.
+driver:
+  name: default
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+  inventory:
+    hosts:
+      all:
+        hosts:
+          localhost:
+            ansible_connection: local
+        children:
+          k8s_nodes:
+            children:
+              first_manager:
+                hosts:
+                  molecule-nsc-manager1:
+                    ansible_host: 10.207.154.230
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              additional_managers: {}
+              workers:
+                hosts:
+                  molecule-nsc-worker1:
+                    ansible_host: 10.207.154.231
+                    lxd_cpu: 2
+                    lxd_mem: 2GB
+                    lxd_disk: 15GB
+                  molecule-nsc-worker2:
+                    ansible_host: 10.207.154.232
+                    lxd_cpu: 2
+                    lxd_mem: 2GB
+                    lxd_disk: 15GB
+          new_workers:
+            hosts:
+              molecule-nsc-worker3:
+                ansible_host: 10.207.154.234
+                lxd_cpu: 2
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+          molecule_ssh_group:
+            children:
+              first_manager:
+              workers:
+              new_workers:
+    group_vars:
+      molecule_ssh_group:
+        ansible_user: root
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+verifier:
+  name: ansible
+
+scenario:
+  # No "idempotence" step here: converge.yml runs a full add-THEN-remove
+  # cycle, and both halves perform genuine create/destroy actions by design
+  # (provisioning and later destroying the same LXD VM, joining and later
+  # deleting the same k8s Node) — every run always reports changed, same as
+  # this role's own destroy.yml/prepare.yml elsewhere are never idempotence-
+  # checked either. The add path's own idempotency (re-running "add" alone
+  # against an already-joined node is a no-op) is exercised implicitly by
+  # tasks/add.yml's "kubelet.conf already exists" guard, but proving it via
+  # Molecule's native step would require converge to only ever run "add",
+  # which would leave this scenario's own new node behind afterward.
+  test_sequence:
+    - dependency
+    - syntax
+    - prepare
+    - converge
+    - verify
+    - destroy

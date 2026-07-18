@@ -1,0 +1,10 @@
+---
+- name: Add a new node to the cluster
+  ansible.builtin.import_tasks: add.yml
+  when: k8s_node_scale_cycle_operation == 'add'
+  tags: [add]
+
+- name: Remove a node from the cluster
+  ansible.builtin.import_tasks: remove.yml
+  when: k8s_node_scale_cycle_operation == 'remove'
+  tags: [remove]
