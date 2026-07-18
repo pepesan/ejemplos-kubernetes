@@ -1,0 +1,5 @@
+topology,result,duration_seconds
+single_manager,pass,570
+default,pass,606
+ha_1x2,pass,596
+ha_3x3,pass,735

@@ -158,7 +158,8 @@ CNI×CSI sweep:
 Runs every combination of `{flannel,cilium} × {none,longhorn,rook_ceph}` across all 4 topologies (24
 runs), skipping `idempotence` (a property of the role's tasks, not of the CNI/CSI choice — already
 covered once per scenario's own normal `molecule test` run). Resumable: results already recorded in
-`molecule/matrix_results.csv` are skipped on a re-run. Not every combination is viable — Rook Ceph
+`../k8s_ha_cluster_matrix_results.csv` (at the `ansible/roles/` level, alongside every other role's own
+matrix results) are skipped on a re-run. Not every combination is viable — Rook Ceph
 requires at least 3 workers (see above) and fails fast as `unsupported` on the 6 combinations that don't
 have it, rather than being treated as a bug.
 

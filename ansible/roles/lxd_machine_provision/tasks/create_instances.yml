@@ -10,6 +10,25 @@
 # from). To mix instance types in the same group, override both
 # lxd_instance_type AND lxd_image per host so each points at an alias of
 # the matching type.
+- name: List existing custom storage volumes in the default pool
+  community.general.lxd_storage_volume_info:
+    pool: default
+    type: custom
+  register: lxd_custom_volumes_info
+  when: groups[lxd_machine_provision_group] | map('extract', hostvars, 'lxd_extra_disk') | select('defined') | list | length > 0
+
+# Optional second block device, for anything that needs raw storage beyond
+# the root disk (e.g. Ceph OSDs) — off by default, only created/attached for
+# hosts that define the per-host "lxd_extra_disk" var.
+- name: Create the extra-disk storage volume for hosts that request one and don't have it yet
+  ansible.builtin.command: >
+    lxc storage volume create default {{ item }}-extra-disk --type=block size={{ hostvars[item].lxd_extra_disk }}
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  when:
+    - hostvars[item].lxd_extra_disk is defined
+    - (item ~ '-extra-disk') not in (lxd_custom_volumes_info.storage_volumes | map(attribute='name') | list)
+  changed_when: true
+
 - name: Create LXD instances for every host in "{{ lxd_machine_provision_group }}"
   community.general.lxd_container:
     name: "{{ item }}"
@@ -21,7 +40,12 @@
     config:
       limits.cpu: "{{ hostvars[item].lxd_cpu | string }}"
       limits.memory: "{{ hostvars[item].lxd_mem }}"
-    devices:
+    devices: "{{ base_devices | combine(extra_disk_device) }}"
+    wait_for_ipv4_addresses: false
+    timeout: "{{ lxd_create_timeout }}"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  vars:
+    base_devices:
       eth0:
         type: nic
         network: "{{ lxd_network }}"
@@ -32,6 +56,6 @@
         path: /
         pool: default
         size: "{{ hostvars[item].lxd_disk }}"
-    wait_for_ipv4_addresses: false
-    timeout: "{{ lxd_create_timeout }}"
-  loop: "{{ groups[lxd_machine_provision_group] }}"
+    extra_disk_device: >-
+      {{ {(item ~ '-extra-disk'): {'type': 'disk', 'pool': 'default', 'source': item ~ '-extra-disk'}}
+         if hostvars[item].lxd_extra_disk is defined else {} }}

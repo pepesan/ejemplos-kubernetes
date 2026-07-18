@@ -1,0 +1,84 @@
+---
+# Ported from ansible/base/05_k8s_ha_almacenamiento_persistente_externo_ceph/10_desplegar_ceph_externo.yml
+# ("Integrar OSDs y aprovisionar almacenamiento en el Clúster Ceph" play).
+- name: Add OSD hosts and provision storage
+  when: inventory_hostname == groups[ceph_external_cluster_monitors_group][0]
+  block:
+    - name: Wait for the Ceph orchestrator to be ready
+      ansible.builtin.command: ceph orch status
+      register: orch_status
+      until: orch_status.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    # "ceph orch host add" prints the same "Added host" success message
+    # whether the host is genuinely new or already registered — found live
+    # via Molecule's native idempotence check, which failed because
+    # changed_when relied on that (non-differentiating) text. Checking the
+    # current host list first, and skipping the command entirely for hosts
+    # already on it, is the only reliable way to make this idempotent.
+    - name: Get the current orchestrator host list
+      ansible.builtin.command: ceph orch host ls -f json
+      register: current_orch_hosts
+      changed_when: false
+
+    - name: Add OSD hosts to the Ceph orchestrator
+      ansible.builtin.command: >
+        ceph orch host add {{ item }} {{ hostvars[item].ansible_host }}
+      loop: "{{ groups[ceph_external_cluster_osds_group] }}"
+      when: item not in (current_orch_hosts.stdout | from_json | map(attribute='hostname') | list)
+      changed_when: true
+
+    # Same issue as above: "ceph orch apply osd --all-available-devices"
+    # always succeeds and always prints a confirmation message, whether or
+    # not it actually changed anything — checking whether the
+    # "osd.all-available-devices" spec already exists first avoids
+    # re-applying (and reporting changed) on every run.
+    # "-f json" isn't reliably a single parseable JSON document here (found
+    # live: "ceph orch ls --service-type osd -f json" failed from_json with
+    # "Expecting value: line 2 column 1", a JSON-lines-shaped quirk rather
+    # than a JSON array) — checking the plain-text output for Ceph's own
+    # "No services reported" message avoids relying on that.
+    - name: Check whether the all-available-devices OSD spec already exists
+      ansible.builtin.command: ceph orch ls --service_name osd.all-available-devices
+      register: existing_osd_spec_check
+      changed_when: false
+      failed_when: false
+
+    - name: Scan devices and create OSDs on all available (empty) disks
+      ansible.builtin.command: ceph orch apply osd --all-available-devices
+      when: existing_osd_spec_check.rc != 0 or 'No services reported' in existing_osd_spec_check.stdout
+      changed_when: true
+
+    # Generalized from the lab's hardcoded ">= 3": the real floor is however
+    # many OSD hosts this inventory actually declares, not a fixed number.
+    - name: Wait for the OSDs to be provisioned
+      ansible.builtin.command: ceph osd stat -f json
+      register: osd_stat
+      until: >-
+        (osd_stat.stdout | from_json).num_up_osds >= (groups[ceph_external_cluster_osds_group] | length)
+        and (osd_stat.stdout | from_json).num_in_osds >= (groups[ceph_external_cluster_osds_group] | length)
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Get the Ceph cluster's health status
+      ansible.builtin.command: ceph health
+      register: ceph_health
+      changed_when: false
+
+    - name: Show cluster details
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  EXTERNAL CEPH CLUSTER BOOTSTRAPPED SUCCESSFULLY"
+          - "  "
+          - "  Monitor IP: {{ ansible_host }}"
+          - "  Health status: {{ ceph_health.stdout }}"
+          - "  OSD nodes: {{ groups[ceph_external_cluster_osds_group] | join(', ') }}"
+          - "  "
+          - "  Ceph Dashboard: http://{{ ansible_host }}:8443 (or default port)"
+          - "  User: admin"
+          - "  Password saved to: {{ ceph_external_cluster_dashboard_password_path }}"
+          - "════════════════════════════════════════════════════════════════"

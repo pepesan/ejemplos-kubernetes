@@ -1,0 +1,102 @@
+---
+# Topology matrix: the Ceph side is fixed (1 mon + 3 OSD, proven in
+# ceph_external_cluster's own scenario), what varies here is the k8s
+# topology — this one mirrors k8s_ha_cluster's own "default" scenario
+# (2 managers + 1 worker), to confirm the CSI integration works the same
+# regardless of k8s cluster size/HA shape. See also ha_1x2, ha_3x3 and
+# single_manager for the other 3 topologies.
+driver:
+  name: default
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+  inventory:
+    hosts:
+      all:
+        hosts:
+          localhost:
+            ansible_connection: local
+        children:
+          ceph_monitors:
+            hosts:
+              molecule-kcec-default-ceph-mon:
+                ansible_host: 10.207.154.180
+                lxd_cpu: 1
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+          ceph_osds:
+            hosts:
+              molecule-kcec-default-ceph-osd1:
+                ansible_host: 10.207.154.181
+                lxd_cpu: 1
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+                lxd_extra_disk: 10GB
+              molecule-kcec-default-ceph-osd2:
+                ansible_host: 10.207.154.182
+                lxd_cpu: 1
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+                lxd_extra_disk: 10GB
+              molecule-kcec-default-ceph-osd3:
+                ansible_host: 10.207.154.183
+                lxd_cpu: 1
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+                lxd_extra_disk: 10GB
+          ceph_nodes:
+            children:
+              ceph_monitors:
+              ceph_osds:
+          k8s_nodes:
+            children:
+              first_manager:
+                hosts:
+                  molecule-kcec-default-k8s-manager1:
+                    ansible_host: 10.207.154.184
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              additional_managers:
+                hosts:
+                  molecule-kcec-default-k8s-manager2:
+                    ansible_host: 10.207.154.185
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              workers:
+                hosts:
+                  molecule-kcec-default-k8s-worker1:
+                    ansible_host: 10.207.154.186
+                    lxd_cpu: 2
+                    lxd_mem: 2GB
+                    lxd_disk: 15GB
+          molecule_ssh_group:
+            children:
+              ceph_monitors:
+              ceph_osds:
+              first_manager:
+              additional_managers:
+              workers:
+    group_vars:
+      molecule_ssh_group:
+        ansible_user: root
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

@@ -1,0 +1,36 @@
+---
+# Ported from ansible/base/05_k8s_ha_almacenamiento_persistente_externo_ceph/10_desplegar_ceph_externo.yml
+# ("Inicializar Clúster Ceph en el nodo Monitor" play).
+- name: Bootstrap the Ceph cluster on the monitor
+  when: inventory_hostname == groups[ceph_external_cluster_monitors_group][0]
+  vars:
+    # Generated once and persisted to a local file outside version control
+    # (see molecule/.gitignore); reused on subsequent runs instead of
+    # generating a new password every time.
+    ceph_dashboard_password: "{{ lookup('ansible.builtin.password', ceph_external_cluster_dashboard_password_path, length=20, chars=['ascii_letters', 'digits']) }}"
+  block:
+    - name: Check whether Ceph is already initialized
+      ansible.builtin.stat:
+        path: /etc/ceph/ceph.conf
+      register: ceph_conf_stat
+
+    - name: Bootstrap the Ceph cluster with cephadm
+      ansible.builtin.command: >
+        cephadm bootstrap
+        --mon-ip {{ ansible_host }}
+        --initial-dashboard-user admin
+        --initial-dashboard-password {{ ceph_dashboard_password | quote }}
+        --skip-monitoring-stack
+        --allow-fqdn-hostname
+      register: bootstrap_out
+      when: not ceph_conf_stat.stat.exists
+      changed_when: true
+
+    - name: Read the SSH public key cephadm generated
+      ansible.builtin.slurp:
+        src: /etc/ceph/ceph.pub
+      register: ceph_pub_key_b64
+
+    - name: Save the Ceph SSH public key as a fact
+      ansible.builtin.set_fact:
+        ceph_ssh_key: "{{ ceph_pub_key_b64.content | b64decode }}"

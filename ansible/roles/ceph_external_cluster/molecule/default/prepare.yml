@@ -1,0 +1,9 @@
+---
+- name: Prepare
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: ceph_nodes
+  roles:
+    - lxd_machine_provision

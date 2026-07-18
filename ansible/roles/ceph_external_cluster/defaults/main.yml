@@ -1,0 +1,11 @@
+---
+# Inventory group names. Default to the exact literal names already used in
+# ansible/base/05_k8s_ha_almacenamiento_persistente_externo_ceph/inventory.ini,
+# so pointing this role at that lab's inventory needs zero changes.
+ceph_external_cluster_monitors_group: ceph_monitors
+ceph_external_cluster_osds_group: ceph_osds
+
+# Where the generated Ceph Dashboard admin password gets saved/read back
+# from (same lookup('ansible.builtin.password', ...) idiom used everywhere
+# else in this repo: generated once, reused on every subsequent run).
+ceph_external_cluster_dashboard_password_path: "{{ inventory_dir }}/ceph_dashboard_password.txt"

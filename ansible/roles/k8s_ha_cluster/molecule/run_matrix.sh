@@ -18,9 +18,13 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROLES_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$SCRIPT_DIR/.."
 
-RESULTS_FILE="$SCRIPT_DIR/matrix_results.csv"
+# Lives at the ansible/roles/ level (not buried in this role's own
+# molecule/ dir) so every role's matrix results are visible together in
+# one place.
+RESULTS_FILE="$ROLES_DIR/k8s_ha_cluster_matrix_results.csv"
 [ -f "$RESULTS_FILE" ] || echo "topology,cni,csi,result,duration_seconds" > "$RESULTS_FILE"
 
 # Per-combination logs, written directly (not through a pipe to "tail" or

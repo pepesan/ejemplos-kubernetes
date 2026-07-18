@@ -1,0 +1,8 @@
+---
+- name: Create the RBD pool and fetch Ceph cluster credentials
+  ansible.builtin.import_tasks: ceph_pool.yml
+  tags: [ceph_pool]
+
+- name: Wire the k8s cluster to consume the external Ceph cluster via ceph-csi
+  ansible.builtin.import_tasks: k8s_integration.yml
+  tags: [k8s_integration]

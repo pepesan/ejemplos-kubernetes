@@ -1,0 +1,19 @@
+---
+# Inventory group for the external Ceph cluster's monitor (same default
+# name as ceph_external_cluster's own group, so pointing both roles at the
+# same inventory needs zero changes).
+k8s_ceph_external_csi_ceph_monitors_group: ceph_monitors
+
+# Where the k8s cluster's admin kubeconfig is read from (same convention
+# k8s_ha_cluster uses: the fetched admin.conf saved locally).
+k8s_ceph_external_csi_kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
+
+# RBD pool created on the external Ceph cluster for Kubernetes volumes.
+k8s_ceph_external_csi_rbd_pool: rbd-k8s
+
+# ceph-csi-operator/ceph-csi-drivers chart version — same proven pin
+# k8s_ha_cluster's own rook_ceph backend already uses for the same chart.
+k8s_ceph_external_csi_chart_version: "1.0.4"
+
+# StorageClass created for RBD volumes backed by the external cluster.
+k8s_ceph_external_csi_storage_class_name: ceph-block-external

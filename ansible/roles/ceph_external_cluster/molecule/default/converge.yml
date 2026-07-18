@@ -1,0 +1,5 @@
+---
+- name: Converge
+  hosts: ceph_monitors:ceph_osds
+  roles:
+    - ceph_external_cluster

@@ -1,0 +1,93 @@
+---
+# Ported from ansible/base/05_k8s_ha_almacenamiento_persistente_externo_ceph/12_verificar_persistencia.yml.
+# Goes beyond checking the StorageClass exists: creates a real PVC, waits
+# for it to bind, and runs a pod that writes and reads back a file through
+# the RBD volume — proving the cross-cluster wiring actually works.
+- name: Verify
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  tasks:
+    - name: Create a test namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: test-ceph-external-persistence
+
+    - name: Create a PVC backed by the external Ceph StorageClass
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: rbd-pvc-external
+            namespace: test-ceph-external-persistence
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+            storageClassName: ceph-block-external
+
+    - name: Wait for the PVC to be Bound
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        kind: PersistentVolumeClaim
+        name: rbd-pvc-external
+        namespace: test-ceph-external-persistence
+      register: pvc_info
+      until: "pvc_info.resources[0].status.phase == 'Bound'"
+      retries: 30
+      delay: 5
+
+    - name: Create a pod that writes to the RBD volume
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: rbd-writer-pod
+            namespace: test-ceph-external-persistence
+          spec:
+            containers:
+              - name: writer
+                image: alpine
+                command: ["/bin/sh", "-c", "echo 'hello from external Ceph' > /mnt/data/test.txt && sleep 3600"]
+                volumeMounts:
+                  - name: my-volume
+                    mountPath: /mnt/data
+            volumes:
+              - name: my-volume
+                persistentVolumeClaim:
+                  claimName: rbd-pvc-external
+
+    - name: Wait for the writer pod to be Running
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        kind: Pod
+        name: rbd-writer-pod
+        namespace: test-ceph-external-persistence
+      register: pod_info
+      until: "pod_info.resources[0].status.phase == 'Running'"
+      retries: 30
+      delay: 5
+
+    - name: Verify the file can be read back from the RBD volume
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} exec rbd-writer-pod -n test-ceph-external-persistence -- cat /mnt/data/test.txt
+      register: cat_out
+      changed_when: false
+      failed_when:
+        - cat_out.rc != 0
+        - "'hello from external Ceph' not in cat_out.stdout"

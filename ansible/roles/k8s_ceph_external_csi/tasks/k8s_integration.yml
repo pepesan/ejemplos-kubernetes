@@ -1,0 +1,119 @@
+---
+# Ported from ansible/base/05_k8s_ha_almacenamiento_persistente_externo_ceph/11_integrar_k8s_ceph_externo.yml
+# ("Integrar Ceph Externo en Kubernetes con Ceph CSI Drivers" play).
+- name: Wire Kubernetes to the external Ceph cluster
+  vars:
+    ceph_monitor_host: "{{ groups[k8s_ceph_external_csi_ceph_monitors_group][0] }}"
+    ceph_mon_ip: "{{ hostvars[ceph_monitor_host]['ansible_host'] }}"
+    ceph_fsid: "{{ hostvars[ceph_monitor_host]['ceph_fsid'] }}"
+    ceph_admin_key: "{{ hostvars[ceph_monitor_host]['ceph_admin_key'] }}"
+  delegate_to: localhost
+  run_once: true
+  block:
+    - name: Create the ceph-csi namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_ceph_external_csi_kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: ceph-csi
+
+    - name: Create the Ceph connection secret (csi-ceph-secret)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_ceph_external_csi_kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: csi-ceph-secret
+            namespace: ceph-csi
+          stringData:
+            userID: admin
+            userKey: "{{ ceph_admin_key }}"
+            admin: "{{ ceph_admin_key }}"
+
+    - name: Add the Ceph CSI Helm repository
+      kubernetes.core.helm_repository:
+        name: ceph-csi-operator
+        repo_url: https://ceph.github.io/ceph-csi-operator
+
+    - name: Install the Ceph CSI operator (CRDs and controller)
+      kubernetes.core.helm:
+        name: ceph-csi-operator
+        chart_ref: ceph-csi-operator/ceph-csi-operator
+        chart_version: "{{ k8s_ceph_external_csi_chart_version }}"
+        release_namespace: ceph-csi
+        create_namespace: true
+        kubeconfig: "{{ k8s_ceph_external_csi_kubeconfig_path }}"
+
+    - name: Wait for the Ceph CSI CRDs to be available
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ k8s_ceph_external_csi_kubeconfig_path }} get crd drivers.csi.ceph.io
+      register: crd_check
+      until: crd_check.rc == 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Install the Ceph CSI drivers
+      kubernetes.core.helm:
+        name: ceph-csi-drivers
+        chart_ref: ceph-csi-operator/ceph-csi-drivers
+        chart_version: "{{ k8s_ceph_external_csi_chart_version }}"
+        release_namespace: ceph-csi
+        kubeconfig: "{{ k8s_ceph_external_csi_kubeconfig_path }}"
+        values:
+          # Connection to the external Ceph cluster via the CephConnection/
+          # ClientProfile CRDs (the ceph-csi-operator/ceph-csi-drivers chart
+          # no longer uses a plain ConfigMap for this).
+          cephConnections:
+            - name: "{{ ceph_fsid }}"
+              monitors:
+                mon-a: "{{ ceph_mon_ip }}:6789"
+              rbdMirrorDaemonCount: 1
+          clientProfiles:
+            - name: "{{ ceph_fsid }}"
+              cephConnection:
+                name: "{{ ceph_fsid }}"
+        server_side: true
+        force_conflicts: true
+
+    - name: Create the StorageClass for external Ceph RBD volumes
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_ceph_external_csi_kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ k8s_ceph_external_csi_storage_class_name }}"
+          provisioner: rbd.csi.ceph.com
+          reclaimPolicy: Delete
+          allowVolumeExpansion: true
+          volumeBindingMode: Immediate
+          parameters:
+            clusterID: "{{ ceph_fsid }}"
+            pool: "{{ k8s_ceph_external_csi_rbd_pool }}"
+            imageFormat: "2"
+            imageFeatures: layering
+            csi.storage.k8s.io/provisioner-secret-name: csi-ceph-secret
+            csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi
+            csi.storage.k8s.io/controller-expand-secret-name: csi-ceph-secret
+            csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi
+            csi.storage.k8s.io/node-stage-secret-name: csi-ceph-secret
+            csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi
+            csi.storage.k8s.io/fstype: ext4
+
+    - name: Show integration summary
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  EXTERNAL CEPH CLUSTER INTEGRATED INTO KUBERNETES SUCCESSFULLY"
+          - "  "
+          - "  Ceph fsid: {{ ceph_fsid }}"
+          - "  Monitor IP: {{ ceph_mon_ip }}:6789"
+          - "  StorageClass created: '{{ k8s_ceph_external_csi_storage_class_name }}' (RBD / RWO)"
+          - "════════════════════════════════════════════════════════════════"

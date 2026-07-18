@@ -1,0 +1,16 @@
+---
+- name: Install cephadm and prerequisites on every Ceph node
+  ansible.builtin.import_tasks: packages.yml
+  tags: [packages]
+
+- name: Bootstrap the Ceph cluster on the monitor node
+  ansible.builtin.import_tasks: bootstrap_monitor.yml
+  tags: [bootstrap_monitor]
+
+- name: Distribute cephadm's SSH key to the OSD nodes
+  ansible.builtin.import_tasks: distribute_ssh_key.yml
+  tags: [distribute_ssh_key]
+
+- name: Add OSD hosts to the orchestrator and provision storage
+  ansible.builtin.import_tasks: configure_osds.yml
+  tags: [configure_osds]

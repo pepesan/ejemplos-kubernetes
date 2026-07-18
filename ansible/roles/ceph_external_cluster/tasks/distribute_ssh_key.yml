@@ -1,0 +1,9 @@
+---
+# Ported from ansible/base/05_k8s_ha_almacenamiento_persistente_externo_ceph/10_desplegar_ceph_externo.yml
+# ("Distribuir clave SSH de Ceph a los nodos OSD" play).
+- name: Add cephadm's SSH key to each OSD host's authorized_keys
+  ansible.posix.authorized_key:
+    user: root
+    state: present
+    key: "{{ hostvars[groups[ceph_external_cluster_monitors_group][0]]['ceph_ssh_key'] }}"
+  when: inventory_hostname in groups[ceph_external_cluster_osds_group]

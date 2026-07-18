@@ -1,0 +1,24 @@
+---
+- name: Bootstrap the external Ceph cluster
+  hosts: ceph_monitors:ceph_osds
+  roles:
+    - ceph_external_cluster
+
+- name: Bootstrap the Kubernetes cluster
+  hosts: k8s_nodes
+  vars:
+    k8s_vip_address: "10.207.154.210"
+    k8s_vip_interface: enp5s0
+    k8s_ha_cluster_cni: flannel
+    k8s_ha_cluster_csi: none
+    k8s_ha_cluster_headlamp_enabled: false
+    k8s_ha_cluster_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_ha_cluster
+
+- name: Wire the k8s cluster to the external Ceph cluster
+  hosts: ceph_monitors:localhost
+  vars:
+    k8s_ceph_external_csi_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_ceph_external_csi

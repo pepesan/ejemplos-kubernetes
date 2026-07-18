@@ -1,0 +1,17 @@
+---
+- name: Destroy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Delete every test VM created by this scenario
+      ansible.builtin.command: "lxc delete --force {{ item }}"
+      loop: "{{ groups['ceph_nodes'] }}"
+      changed_when: true
+      failed_when: false
+
+    - name: Delete the extra-disk storage volumes created for the OSD VMs
+      ansible.builtin.command: "lxc storage volume delete default {{ item }}-extra-disk"
+      loop: "{{ groups['ceph_osds'] }}"
+      changed_when: true
+      failed_when: false

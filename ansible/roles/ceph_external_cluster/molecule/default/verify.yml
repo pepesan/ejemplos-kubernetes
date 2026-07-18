@@ -1,0 +1,38 @@
+---
+- name: Verify
+  hosts: ceph_monitors
+  gather_facts: false
+  tasks:
+    - name: Get Ceph cluster health
+      ansible.builtin.command: ceph health
+      register: ceph_health
+      changed_when: false
+
+    - name: Assert the cluster is healthy (or only warning, e.g. about pg count on a lab-scale pool)
+      ansible.builtin.assert:
+        that:
+          - "'HEALTH_ERR' not in ceph_health.stdout"
+        fail_msg: "Ceph cluster reports an error: {{ ceph_health.stdout }}"
+
+    - name: Get OSD stats
+      ansible.builtin.command: ceph osd stat -f json
+      register: osd_stat
+      changed_when: false
+
+    - name: Assert all 3 OSDs are up and in
+      ansible.builtin.assert:
+        that:
+          - (osd_stat.stdout | from_json).num_up_osds == 3
+          - (osd_stat.stdout | from_json).num_in_osds == 3
+        fail_msg: "Not all 3 OSDs are up/in: {{ osd_stat.stdout }}"
+
+    - name: Get orchestrator host list
+      ansible.builtin.command: ceph orch host ls -f json
+      register: orch_hosts
+      changed_when: false
+
+    - name: Assert all 4 Ceph nodes are registered with the orchestrator
+      ansible.builtin.assert:
+        that:
+          - (orch_hosts.stdout | from_json) | length == 4
+        fail_msg: "Expected 4 hosts registered with the orchestrator, got: {{ orch_hosts.stdout }}"

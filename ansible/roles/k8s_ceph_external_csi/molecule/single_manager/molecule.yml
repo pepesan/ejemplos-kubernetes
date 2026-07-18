@@ -1,0 +1,89 @@
+---
+# Tests a genuine two-cluster integration, so this scenario provisions both
+# sides: a full 1 monitor + 3 OSD Ceph cluster (same hard floor as
+# ceph_external_cluster's own scenario — mon quorum/OSD wait can't succeed
+# with fewer) and a minimal one-node Kubernetes cluster (k8s_ha_cluster's
+# single_manager topology, the cheapest base since storage comes from this
+# role instead of a k8s_ha_cluster CSI backend). Real host, "default" driver
+# — same reasoning as every other role here.
+driver:
+  name: default
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+  inventory:
+    hosts:
+      all:
+        hosts:
+          localhost:
+            ansible_connection: local
+        children:
+          ceph_monitors:
+            hosts:
+              molecule-kcec-ceph-mon:
+                ansible_host: 10.207.154.170
+                lxd_cpu: 1
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+          ceph_osds:
+            hosts:
+              molecule-kcec-ceph-osd1:
+                ansible_host: 10.207.154.171
+                lxd_cpu: 1
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+                lxd_extra_disk: 10GB
+              molecule-kcec-ceph-osd2:
+                ansible_host: 10.207.154.172
+                lxd_cpu: 1
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+                lxd_extra_disk: 10GB
+              molecule-kcec-ceph-osd3:
+                ansible_host: 10.207.154.173
+                lxd_cpu: 1
+                lxd_mem: 2GB
+                lxd_disk: 15GB
+                lxd_extra_disk: 10GB
+          ceph_nodes:
+            children:
+              ceph_monitors:
+              ceph_osds:
+          k8s_nodes:
+            children:
+              first_manager:
+                hosts:
+                  molecule-kcec-k8s-manager1:
+                    ansible_host: 10.207.154.174
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              additional_managers: {}
+              workers: {}
+          molecule_ssh_group:
+            children:
+              ceph_monitors:
+              ceph_osds:
+              first_manager:
+    group_vars:
+      molecule_ssh_group:
+        ansible_user: root
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

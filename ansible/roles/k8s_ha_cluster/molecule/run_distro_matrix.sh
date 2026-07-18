@@ -14,9 +14,11 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROLES_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$SCRIPT_DIR/.."
 
-RESULTS_FILE="$SCRIPT_DIR/distro_matrix_results.csv"
+# Lives at the ansible/roles/ level — see run_matrix.sh for why.
+RESULTS_FILE="$ROLES_DIR/k8s_ha_cluster_distro_matrix_results.csv"
 [ -f "$RESULTS_FILE" ] || echo "distro,image_alias,result,duration_seconds" > "$RESULTS_FILE"
 
 # Per-distro logs, written directly (not through a pipe to "tail" or

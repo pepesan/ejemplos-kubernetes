@@ -1,0 +1,32 @@
+---
+# Ported from ansible/base/05_k8s_ha_almacenamiento_persistente_externo_ceph/11_integrar_k8s_ceph_externo.yml
+# ("Obtener credenciales y datos del Clúster Ceph Externo" play).
+- name: Create the RBD pool and fetch cluster credentials on the Ceph monitor
+  when: inventory_hostname == groups[k8s_ceph_external_csi_ceph_monitors_group][0]
+  block:
+    - name: Create the RBD pool for Kubernetes volumes
+      ansible.builtin.command: "ceph osd pool create {{ k8s_ceph_external_csi_rbd_pool }}"
+      register: rbd_pool_create
+      failed_when:
+        - rbd_pool_create.rc != 0
+        - "'already exists' not in rbd_pool_create.stderr"
+      changed_when: "'created pool' in rbd_pool_create.stdout"
+
+    - name: Initialize the pool as an RBD application pool
+      ansible.builtin.command: "rbd pool init {{ k8s_ceph_external_csi_rbd_pool }}"
+      changed_when: false
+
+    - name: Get the Ceph cluster's fsid
+      ansible.builtin.command: ceph fsid
+      register: ceph_fsid_raw
+      changed_when: false
+
+    - name: Get the client.admin key
+      ansible.builtin.command: ceph auth get-key client.admin
+      register: ceph_admin_key_raw
+      changed_when: false
+
+    - name: Save the cluster's fsid and admin key as facts
+      ansible.builtin.set_fact:
+        ceph_fsid: "{{ ceph_fsid_raw.stdout | trim }}"
+        ceph_admin_key: "{{ ceph_admin_key_raw.stdout | trim }}"

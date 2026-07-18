@@ -1,0 +1,21 @@
+---
+galaxy_info:
+  role_name: ceph_external_cluster
+  namespace: ejemplos_kubernetes
+  description: >-
+    Bootstraps a standalone Ceph cluster via cephadm on a set of already-provisioned instances
+    (one monitor + a set of OSD nodes), independent of any Kubernetes cluster. Pair this with
+    k8s_ceph_external_csi to wire a separately-provisioned k8s cluster to consume it.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "24.04"
+        - "26.04"
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+
+dependencies: []

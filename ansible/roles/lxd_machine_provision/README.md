@@ -55,6 +55,7 @@ needs zero inventory changes):
 | `lxd_mem` | `limits.memory` (e.g. `"4GB"`) |
 | `lxd_disk` | Root disk size (e.g. `"32GB"`) |
 | `lxd_instance_type` (optional) | Overrides `lxd_instance_type` for this host only |
+| `lxd_extra_disk` (optional) | Attaches a second, raw block device (e.g. `"20GB"`) beyond the root disk — for anything that needs its own storage device (e.g. a Ceph OSD's backing disk), not just more root disk space. Off by default; only created/attached for hosts that define it. |
 
 | Role variable | Default | Purpose |
 | --- | --- | --- |

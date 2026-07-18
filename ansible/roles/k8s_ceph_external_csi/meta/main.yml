@@ -1,0 +1,21 @@
+---
+galaxy_info:
+  role_name: k8s_ceph_external_csi
+  namespace: ejemplos_kubernetes
+  description: >-
+    Wires an already-running Kubernetes cluster to consume an already-bootstrapped external
+    Ceph cluster (see ceph_external_cluster) via ceph-csi: creates the RBD pool, installs the
+    ceph-csi-operator/ceph-csi-drivers charts, and creates a StorageClass backed by it.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "24.04"
+        - "26.04"
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+
+dependencies: []
