@@ -1,6 +1,7 @@
 ---
 galaxy_info:
   role_name: lxd_host_bootstrap
+  namespace: ejemplos_kubernetes
   description: >-
     Prepares a physical/virtual host to run LXD-based Kubernetes labs:
     installs LXD, kubectl and helm, initializes LXD's network/storage/profile,

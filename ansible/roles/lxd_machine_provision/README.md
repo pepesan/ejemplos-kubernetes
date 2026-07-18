@@ -75,7 +75,7 @@ molecule test
 
 Two scenarios are provided under `molecule/`: `default` (VM instances) and
 `container` (LXD containers, using its own `prepare.yml` to import a
-container-format test image first) — both use the `delegated` driver
+container-format test image first) — both use the `default` driver (formerly named `delegated`)
 against the real host (creating actual LXD instances isn't something a
 plain Docker/Podman-based Molecule driver can do), both include Molecule's
 built-in `idempotence` step (the role is fully idempotent: the SSH-key-push

@@ -59,7 +59,7 @@ cd ansible/roles/lxd_host_bootstrap
 sudo -E molecule test
 ```
 
-See `molecule/default/` — it uses the `delegated` driver against the real
+See `molecule/default/` — it uses the `default` driver (formerly named `delegated`) against the real
 host (this role provisions the very virtualization layer Molecule's usual
 container-based drivers would need, so testing it inside a container isn't
 representative). The scenario assumes it's run as root already (hence

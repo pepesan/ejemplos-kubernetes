@@ -1,6 +1,7 @@
 ---
 galaxy_info:
   role_name: lxd_machine_provision
+  namespace: ejemplos_kubernetes
   description: >-
     Creates LXD instances (virtual machines or containers) from a given
     inventory group, waits for the LXD agent, injects the host's SSH

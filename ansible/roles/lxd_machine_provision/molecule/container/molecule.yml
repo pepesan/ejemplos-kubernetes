@@ -3,13 +3,16 @@
 # provisions a throwaway LXD *container* instead of a virtual-machine, to
 # exercise the lxd_instance_type: container code path.
 driver:
-  name: delegated
+  name: default
 
 platforms:
   - name: localhost
 
 provisioner:
   name: ansible
+  # See molecule/default/molecule.yml for why this is needed.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
   inventory:
     hosts:
       all:
@@ -32,6 +35,7 @@ scenario:
   test_sequence:
     - dependency
     - syntax
+    - prepare
     - converge
     - idempotence
     - verify

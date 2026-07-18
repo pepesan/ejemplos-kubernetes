@@ -1,16 +1,22 @@
 ---
-# This role creates real LXD instances, so it's tested with the "delegated"
-# driver against the real host (which must already be bootstrapped by
-# lxd_host_bootstrap) instead of an isolated container-based driver. This
-# scenario provisions a single throwaway virtual-machine instance.
+# This role creates real LXD instances, so it's tested with the "default"
+# driver (formerly named "delegated") against the real host (which must
+# already be bootstrapped by lxd_host_bootstrap) instead of an isolated
+# container-based driver. This scenario provisions a single throwaway
+# virtual-machine instance.
 driver:
-  name: delegated
+  name: default
 
 platforms:
   - name: localhost
 
 provisioner:
   name: ansible
+  # Points ansible-playbook at ansible/roles/ (this role's parent
+  # directory) so "roles: [lxd_machine_provision]" in converge.yml
+  # resolves without needing the role to be installed as a collection.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
   inventory:
     hosts:
       all:

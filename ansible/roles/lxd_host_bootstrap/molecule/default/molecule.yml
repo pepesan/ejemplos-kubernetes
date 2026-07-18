@@ -2,17 +2,22 @@
 # This role provisions the host's virtualization layer (LXD itself), so it
 # cannot be exercised inside Molecule's usual container-based drivers
 # (Docker/Podman lack the snapd/kernel-module/virtualization support this
-# role needs). The "delegated" driver runs the role directly against the
-# real host instead of spinning up an isolated test instance — see the
-# README for the reasoning.
+# role needs). The "default" driver (formerly named "delegated") runs the
+# role directly against the real host instead of spinning up an isolated
+# test instance — see the README for the reasoning.
 driver:
-  name: delegated
+  name: default
 
 platforms:
   - name: localhost
 
 provisioner:
   name: ansible
+  # Points ansible-playbook at ansible/roles/ (this role's parent
+  # directory) so "roles: [lxd_host_bootstrap]" in converge.yml resolves
+  # without needing the role to be installed as a collection.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
   inventory:
     host_vars:
       localhost:
