@@ -1,6 +1,12 @@
 ---
+# This scenario assumes it's run as root already (e.g. "sudo -E molecule
+# test", or from a root shell) rather than escalating via become — avoids
+# an interactive sudo password prompt for local/CI testing. Real usage of
+# this role (e.g. bootstrap_host.sh) still runs as a regular user with
+# "become: true" + "--ask-become-pass", unaffected by this test-only
+# shortcut.
 - name: Converge
   hosts: localhost
-  become: true
+  become: false
   roles:
     - lxd_host_bootstrap

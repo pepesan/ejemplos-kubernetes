@@ -56,12 +56,17 @@ most relevant ones:
 
 ```bash
 cd ansible/roles/lxd_host_bootstrap
-molecule test
+sudo -E molecule test
 ```
 
 See `molecule/default/` — it uses the `delegated` driver against the real
 host (this role provisions the very virtualization layer Molecule's usual
 container-based drivers would need, so testing it inside a container isn't
-representative). `molecule converge` run twice is also the primary
-idempotency check, matching this repository's general two-pass validation
-discipline (see `.agents/rules/idempotencia.md`).
+representative). The scenario assumes it's run as root already (hence
+`sudo -E`, not `--ask-become-pass`/interactive escalation) — it sets
+`become: false` in `converge.yml`, purely a local/CI testing convenience.
+Real usage of this role (e.g. `bootstrap_host.sh`) is unaffected: it still
+runs as a regular user with `become: true` and prompts for the sudo
+password. The built-in `idempotence` step is included in the test sequence
+and is the primary idempotency check, matching this repository's general
+two-pass validation discipline (see `.agents/rules/idempotencia.md`).
