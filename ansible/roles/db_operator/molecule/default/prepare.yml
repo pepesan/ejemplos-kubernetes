@@ -1,0 +1,9 @@
+---
+- name: Prepare the Kubernetes node
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_machine_provision_group: k8s_nodes
+  roles:
+    - lxd_machine_provision

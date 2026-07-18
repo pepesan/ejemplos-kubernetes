@@ -1,0 +1,27 @@
+---
+# Which operator to install: pxc, postgresql, mongodb or mariadb. Selects
+# tasks/{{ db_operator_name }}.yml — task-file-indexed-by-name, same
+# convention k8s_ha_cluster uses for its cni/csi selection. pxc/postgresql/
+# mongodb are Percona operators sharing one Helm repo; mariadb is a separate
+# upstream (mariadb-operator) with its own repo — each task file adds
+# whichever repo it needs, self-contained.
+db_operator_name: pxc
+
+# Admin kubeconfig of the cluster to install into.
+db_operator_kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
+
+# Namespace the selected operator is installed into. Defaults match the base
+# labs exactly (pxc/postgres/mongodb/mariadb — not a fixed 1:1 name mapping,
+# just happens to match namespace-per-lab); each per-operator task file
+# falls back to its own literal default when this is left unset.
+db_operator_namespace: ""
+
+# Per-operator chart version pins, taken directly from the proven values
+# already live in the base labs' group_vars/all.yml (not guesses).
+db_operator_pxc_chart_version: "1.20.0"
+db_operator_pg_chart_version: "3.0.0"
+db_operator_psmdb_chart_version: "1.22.0"
+db_operator_mariadb_chart_version: "26.6.0"
+
+# How long to wait for the operator Deployment's rollout to finish.
+db_operator_rollout_timeout: 180s

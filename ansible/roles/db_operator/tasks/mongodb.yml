@@ -1,0 +1,36 @@
+---
+- name: Add the Percona Helm repository
+  kubernetes.core.helm_repository:
+    name: percona
+    repo_url: https://percona.github.io/percona-helm-charts/
+  # No force_update: true here — same reasoning as tasks/pxc.yml.
+
+- name: Set the psmdb-operator namespace
+  ansible.builtin.set_fact:
+    _db_operator_namespace: "{{ db_operator_namespace | default('mongodb', true) }}"
+
+- name: Create the psmdb-operator namespace if it doesn't exist
+  kubernetes.core.k8s:
+    kubeconfig: "{{ db_operator_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ _db_operator_namespace }}"
+
+- name: Install the Percona Operator for MongoDB (psmdb-operator) via Helm
+  kubernetes.core.helm:
+    name: psmdb-operator
+    chart_ref: percona/psmdb-operator
+    chart_version: "{{ db_operator_psmdb_chart_version }}"
+    release_namespace: "{{ _db_operator_namespace }}"
+    kubeconfig: "{{ db_operator_kubeconfig_path }}"
+    timeout: 5m0s
+
+- name: Wait for the psmdb-operator rollout to finish
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ db_operator_kubeconfig_path }}
+    -n {{ _db_operator_namespace }}
+    rollout status deployment/psmdb-operator --timeout={{ db_operator_rollout_timeout }}
+  changed_when: false

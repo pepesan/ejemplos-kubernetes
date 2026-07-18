@@ -1,0 +1,34 @@
+---
+- name: Bootstrap the minimal Kubernetes cluster
+  hosts: k8s_nodes
+  vars:
+    k8s_vip_address: "10.207.154.221"
+    k8s_vip_interface: enp5s0
+    k8s_ha_cluster_cni: flannel
+    k8s_ha_cluster_csi: none
+    k8s_ha_cluster_headlamp_enabled: false
+    k8s_ha_cluster_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_ha_cluster
+
+- name: Install the selected database operator(s)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    db_operator_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    # Overridable via DB_OPERATOR_TEST_NAMES (comma-separated) by
+    # molecule/run_matrix.sh, which loops this scenario once per operator
+    # name to prove each installs cleanly standalone, not just as part of
+    # the normal (non-matrix) run's bundle of all 4 — same "one axis, own
+    # CSV" pattern k8s_ceph_external_csi's run_topology_matrix.sh uses.
+    # Default (unset) matches this scenario's normal run: all 4 together.
+    db_operator_test_names: >-
+      {{ (lookup('env', 'DB_OPERATOR_TEST_NAMES') | default('pxc,postgresql,mongodb,mariadb', true)).split(',') }}
+  tasks:
+    - name: Install each operator
+      ansible.builtin.include_role:
+        name: db_operator
+      vars:
+        db_operator_name: "{{ item }}"
+      loop: "{{ db_operator_test_names }}"

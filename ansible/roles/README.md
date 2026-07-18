@@ -7,6 +7,7 @@ Standalone, reusable Ansible roles extracted from the logic duplicated across th
 - [`k8s_ha_cluster`](k8s_ha_cluster/): turns a set of already-provisioned instances into a working HA Kubernetes cluster (kubeadm + kube-vip), with a swappable CNI (Flannel/Cilium), an optional swappable CSI/storage backend (Longhorn/Rook Ceph) and an optional Headlamp dashboard.
 - [`ceph_external_cluster`](ceph_external_cluster/): bootstraps a standalone Ceph cluster via `cephadm` (one monitor + a set of OSD nodes), independent of any Kubernetes cluster.
 - [`k8s_ceph_external_csi`](k8s_ceph_external_csi/): wires an already-running Kubernetes cluster to consume an already-bootstrapped `ceph_external_cluster` via `ceph-csi`.
+- [`db_operator`](db_operator/): installs a database operator (Percona's PXC/MySQL, PostgreSQL or MongoDB operator, or `mariadb-operator`) into an already-running Kubernetes cluster via Helm.
 
 See each role's own `README.md` for its full variable reference, usage example and testing instructions.
 

@@ -1,0 +1,39 @@
+---
+- name: Add the Percona Helm repository
+  kubernetes.core.helm_repository:
+    name: percona
+    repo_url: https://percona.github.io/percona-helm-charts/
+  # No force_update: true here — found live in k8s_ha_cluster that it makes
+  # this task always report changed regardless of whether the repo URL
+  # actually changed. Chart versions are pinned explicitly anyway, so
+  # nothing depends on force-refreshing the index every run.
+
+- name: Set the pxc-operator namespace
+  ansible.builtin.set_fact:
+    _db_operator_namespace: "{{ db_operator_namespace | default('pxc', true) }}"
+
+- name: Create the pxc-operator namespace if it doesn't exist
+  kubernetes.core.k8s:
+    kubeconfig: "{{ db_operator_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ _db_operator_namespace }}"
+
+- name: Install the Percona Operator for MySQL (pxc-operator) via Helm
+  kubernetes.core.helm:
+    name: pxc-operator
+    chart_ref: percona/pxc-operator
+    chart_version: "{{ db_operator_pxc_chart_version }}"
+    release_namespace: "{{ _db_operator_namespace }}"
+    kubeconfig: "{{ db_operator_kubeconfig_path }}"
+    timeout: 5m0s
+
+- name: Wait for the pxc-operator rollout to finish
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ db_operator_kubeconfig_path }}
+    -n {{ _db_operator_namespace }}
+    rollout status deployment/pxc-operator --timeout={{ db_operator_rollout_timeout }}
+  changed_when: false

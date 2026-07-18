@@ -1,0 +1,4 @@
+---
+- name: Install the selected database operator
+  ansible.builtin.import_tasks: "{{ db_operator_name }}.yml"
+  tags: ["{{ db_operator_name }}"]

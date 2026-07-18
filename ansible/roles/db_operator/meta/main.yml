@@ -1,0 +1,24 @@
+---
+galaxy_info:
+  role_name: db_operator
+  namespace: ejemplos_kubernetes
+  description: >-
+    Installs a database operator (Percona's PXC/MySQL, PostgreSQL or MongoDB operator, or
+    mariadb-operator) into an already-running Kubernetes cluster via Helm: add the operator's
+    chart repo, install its chart(s) into its namespace, wait for its Deployment(s) to roll out.
+    Faithfully extracted from the near-identical "12_desplegar_*_operator.yml" step repeated
+    across ansible/base/10_k8s_percona_mysql_pxc, base/11_k8s_mariadb_galera,
+    base/12_k8s_percona_postgresql and base/13_k8s_percona_mongodb.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "24.04"
+        - "26.04"
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+
+dependencies: []

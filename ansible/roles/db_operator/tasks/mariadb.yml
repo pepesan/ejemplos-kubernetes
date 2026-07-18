@@ -1,0 +1,70 @@
+---
+# Ported from ansible/base/11_k8s_mariadb_galera/12_desplegar_mariadb_operator.yml.
+# Different Helm repo from the Percona-family operators (own upstream, not
+# Percona's), and needs both a CRDs chart and the controller chart, plus a
+# separate validating-webhook Deployment that becomes ready a few seconds
+# after the main controller (mariadb-operator-cert-controller has to mount
+# its TLS Secret first) — a MariaDB CRD created before the webhook has live
+# Service endpoints fails with "no route to host", so this waits for the
+# Service's endpoints too, not just the Deployment rollout.
+- name: Add the mariadb-operator Helm repository
+  kubernetes.core.helm_repository:
+    name: mariadb-operator
+    repo_url: https://mariadb-operator.github.io/mariadb-operator
+
+- name: Set the mariadb-operator namespace
+  ansible.builtin.set_fact:
+    _db_operator_namespace: "{{ db_operator_namespace | default('mariadb', true) }}"
+
+- name: Create the mariadb-operator namespace if it doesn't exist
+  kubernetes.core.k8s:
+    kubeconfig: "{{ db_operator_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ _db_operator_namespace }}"
+
+- name: Install the mariadb-operator CRDs via Helm
+  kubernetes.core.helm:
+    name: mariadb-operator-crds
+    chart_ref: mariadb-operator/mariadb-operator-crds
+    chart_version: "{{ db_operator_mariadb_chart_version }}"
+    release_namespace: "{{ _db_operator_namespace }}"
+    kubeconfig: "{{ db_operator_kubeconfig_path }}"
+    timeout: 5m0s
+
+- name: Install the mariadb-operator via Helm
+  kubernetes.core.helm:
+    name: mariadb-operator
+    chart_ref: mariadb-operator/mariadb-operator
+    chart_version: "{{ db_operator_mariadb_chart_version }}"
+    release_namespace: "{{ _db_operator_namespace }}"
+    kubeconfig: "{{ db_operator_kubeconfig_path }}"
+    timeout: 5m0s
+
+- name: Wait for the mariadb-operator rollout to finish
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ db_operator_kubeconfig_path }}
+    -n {{ _db_operator_namespace }}
+    rollout status deployment/mariadb-operator --timeout={{ db_operator_rollout_timeout }}
+  changed_when: false
+
+- name: Wait for the mariadb-operator validating webhook rollout to finish
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ db_operator_kubeconfig_path }}
+    -n {{ _db_operator_namespace }}
+    rollout status deployment/mariadb-operator-webhook --timeout={{ db_operator_rollout_timeout }}
+  changed_when: false
+
+- name: Wait for the webhook Service to have active endpoints
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ db_operator_kubeconfig_path }} -n {{ _db_operator_namespace }}
+    get endpoints mariadb-operator-webhook
+    -o jsonpath={.subsets[0].addresses[0].ip}
+  register: db_operator_webhook_endpoint_check
+  until: db_operator_webhook_endpoint_check.stdout | trim | length > 0
+  retries: 20
+  delay: 5
+  changed_when: false

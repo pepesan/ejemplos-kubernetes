@@ -1,0 +1,5 @@
+operator,result,duration_seconds
+pxc,pass,182
+postgresql,pass,181
+mongodb,pass,179
+mariadb,pass,215

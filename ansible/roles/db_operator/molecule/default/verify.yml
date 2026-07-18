@@ -1,0 +1,54 @@
+---
+- name: Verify
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    db_operator_test_names: >-
+      {{ (lookup('env', 'DB_OPERATOR_TEST_NAMES') | default('pxc,postgresql,mongodb,mariadb', true)).split(',') }}
+    all_operators:
+      - name: pxc
+        namespace: pxc
+        deployment: pxc-operator
+      - name: postgresql
+        namespace: postgres
+        deployment: pg-operator
+      - name: mongodb
+        namespace: mongodb
+        deployment: psmdb-operator
+      - name: mariadb
+        namespace: mariadb
+        deployment: mariadb-operator
+    operators: "{{ all_operators | selectattr('name', 'in', db_operator_test_names) | list }}"
+  tasks:
+    - name: Check each operator's namespace exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        kind: Namespace
+        name: "{{ item.namespace }}"
+      register: ns_info
+      loop: "{{ operators }}"
+      loop_control:
+        label: "{{ item.name }}"
+      failed_when: ns_info.resources | length == 0
+
+    - name: Check each operator's Helm release is deployed
+      ansible.builtin.command: >
+        helm status {{ item.deployment }} -n {{ item.namespace }}
+        --kubeconfig {{ kubeconfig_path }} -o json
+      loop: "{{ operators }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: helm_status
+      changed_when: false
+      failed_when: (helm_status.stdout | from_json)['info']['status'] != 'deployed'
+
+    - name: Check each operator's Deployment rollout is complete
+      ansible.builtin.command: >
+        kubectl --kubeconfig={{ kubeconfig_path }} -n {{ item.namespace }}
+        rollout status deployment/{{ item.deployment }} --timeout=30s
+      loop: "{{ operators }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
