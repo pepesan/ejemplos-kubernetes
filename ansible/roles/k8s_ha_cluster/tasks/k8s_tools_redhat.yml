@@ -1,0 +1,45 @@
+---
+# pkgs.k8s.io publishes an RPM repo too, same versioned path scheme as the
+# Debian one. "exclude" + "disable_excludes: kubernetes" is required per
+# Kubernetes' own docs — without it, dnf's own exclude list (set by the repo
+# definition, to stop the base OS repos from shadowing these packages)
+# blocks the very install it's meant to protect.
+- name: Add the official Kubernetes repository
+  ansible.builtin.yum_repository:
+    name: kubernetes
+    description: Kubernetes
+    baseurl: "https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/rpm/"
+    gpgcheck: true
+    gpgkey: "https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/rpm/repodata/repomd.xml.key"
+    exclude: kubelet kubeadm kubectl cri-tools kubernetes-cni
+
+- name: Install kubelet, kubeadm and kubectl
+  ansible.builtin.dnf:
+    name:
+      - kubelet
+      - kubeadm
+      - kubectl
+    state: present
+    disable_excludes: kubernetes
+
+# Equivalent to the Debian path's "dpkg_selections: hold" — pins the 3
+# packages against unrelated "dnf upgrade" runs. Needs the versionlock
+# plugin installed first (not present by default on Rocky/Fedora).
+- name: Install the dnf versionlock plugin
+  ansible.builtin.dnf:
+    name: python3-dnf-plugin-versionlock
+    state: present
+
+- name: Check which packages are already versionlocked
+  ansible.builtin.command: dnf versionlock list
+  register: versionlock_list
+  changed_when: false
+
+- name: Hold kubelet, kubeadm and kubectl at their installed version
+  ansible.builtin.command: "dnf versionlock add {{ item }}"
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+  when: item not in versionlock_list.stdout
+  changed_when: true

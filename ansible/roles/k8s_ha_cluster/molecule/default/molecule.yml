@@ -1,0 +1,72 @@
+---
+# This role provisions/configures real LXD VMs (kubeadm/containerd need
+# genuine kernel isolation), so it's tested with the "default" driver
+# (formerly "delegated") against the real host, like the other two roles.
+# Smallest topology that still exercises every guarded task file for real:
+# 2 managers (first_manager + 1 additional_manager) + 1 worker = 3 VMs.
+driver:
+  name: default
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  # Points ansible-playbook at ansible/roles/ (this role's parent
+  # directory) so "roles: [k8s_ha_cluster]" / "roles: [lxd_machine_provision]"
+  # in prepare.yml/converge.yml resolve without needing either role
+  # installed as a collection.
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+  inventory:
+    hosts:
+      all:
+        hosts:
+          localhost:
+            ansible_connection: local
+        children:
+          k8s_nodes:
+            children:
+              first_manager:
+                hosts:
+                  molecule-ha-manager1:
+                    ansible_host: 10.207.154.120
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              additional_managers:
+                hosts:
+                  molecule-ha-manager2:
+                    ansible_host: 10.207.154.121
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              workers:
+                hosts:
+                  molecule-ha-worker1:
+                    ansible_host: 10.207.154.122
+                    lxd_cpu: 2
+                    lxd_mem: 2GB
+                    lxd_disk: 15GB
+          molecule_ssh_group:
+            children:
+              first_manager:
+              additional_managers:
+              workers:
+    group_vars:
+      molecule_ssh_group:
+        ansible_user: root
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

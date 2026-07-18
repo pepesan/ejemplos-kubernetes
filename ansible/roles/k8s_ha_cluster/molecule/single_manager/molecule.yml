@@ -1,0 +1,59 @@
+---
+# Minimal topology: a single manager, no additional managers and no
+# workers. Exercises control_plane_init.yml on its own, with
+# control_plane_join.yml/workers_join.yml's guards resolving to empty
+# groups (both declared explicitly below with no hosts, so groups[...]
+# resolves to [] instead of raising an undefined-group error).
+driver:
+  name: default
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+  inventory:
+    hosts:
+      all:
+        hosts:
+          localhost:
+            ansible_connection: local
+        children:
+          k8s_nodes:
+            children:
+              first_manager:
+                hosts:
+                  molecule-ha1x0-manager1:
+                    ansible_host: 10.207.154.140
+                    # Overridable via env var by molecule/run_distro_matrix.sh, which
+                    # loops this scenario across every supported distro's VM image.
+                    # Falls back to the normal default (the local Ubuntu 26.04 VM
+                    # image every other scenario uses) when unset.
+                    lxd_image: "{{ lookup('env', 'K8S_HA_CLUSTER_TEST_DISTRO_IMAGE') | default('k8s-template', true) }}"
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              additional_managers: {}
+              workers: {}
+          molecule_ssh_group:
+            children:
+              first_manager:
+    group_vars:
+      molecule_ssh_group:
+        ansible_user: root
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

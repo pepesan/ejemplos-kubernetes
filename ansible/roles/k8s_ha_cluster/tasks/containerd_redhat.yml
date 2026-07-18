@@ -1,0 +1,23 @@
+---
+# Docker publishes separate per-distro repos for RHEL-family: Fedora gets
+# its own ("linux/fedora"), Rocky/RHEL/CentOS share the CentOS one
+# ("linux/centos") since they're all rebuilds of the same upstream.
+- name: Install prerequisite packages (ca-certificates, curl)
+  ansible.builtin.dnf:
+    name: [ca-certificates, curl]
+    state: present
+
+- name: Add the official Docker repository
+  ansible.builtin.yum_repository:
+    name: docker-ce
+    description: "Docker CE Stable - $basearch"
+    baseurl: >-
+      https://download.docker.com/linux/{{ 'fedora' if ansible_facts.distribution == 'Fedora' else 'centos' }}/{{
+      ansible_facts.distribution_major_version }}/$basearch/stable
+    gpgcheck: true
+    gpgkey: "https://download.docker.com/linux/{{ 'fedora' if ansible_facts.distribution == 'Fedora' else 'centos' }}/gpg"
+
+- name: Install containerd.io
+  ansible.builtin.dnf:
+    name: containerd.io
+    state: present

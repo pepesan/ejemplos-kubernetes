@@ -1,0 +1,48 @@
+---
+- name: Verify
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    csi_under_test: "{{ lookup('env', 'K8S_HA_CLUSTER_TEST_CSI') | default('longhorn', true) }}"
+  tasks:
+    - name: Check that the control-plane VIP responds on the API port
+      ansible.builtin.wait_for:
+        host: "10.207.154.136"
+        port: 6443
+        timeout: 10
+
+    # Retry instead of checking once — see single_manager/verify.yml for why.
+    - name: Get cluster nodes
+      ansible.builtin.command: "kubectl --kubeconfig={{ kubeconfig_path }} get nodes -o json"
+      register: nodes_out
+      until: >
+        (nodes_out.stdout | from_json)['items'] | length == 6 and
+        (nodes_out.stdout | from_json)['items'] | map(attribute='status.conditions') | map('selectattr', 'type', 'eq', 'Ready') | map('map', attribute='status') | map('first') | unique == ['True']
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Assert all 6 nodes are Ready
+      ansible.builtin.assert:
+        that:
+          - (nodes_out.stdout | from_json)['items'] | length == 6
+          - (nodes_out.stdout | from_json)['items'] | map(attribute='status.conditions') | map('selectattr', 'type', 'eq', 'Ready') | map('map', attribute='status') | map('first') | unique == ['True']
+        fail_msg: "Not every node reports Ready."
+
+    - name: Check that the Longhorn StorageClass was created
+      ansible.builtin.command: "kubectl --kubeconfig={{ kubeconfig_path }} get storageclass longhorn"
+      changed_when: false
+      when: csi_under_test == 'longhorn'
+
+    - name: Check that the Rook Ceph StorageClasses were created
+      ansible.builtin.command: "kubectl --kubeconfig={{ kubeconfig_path }} get storageclass ceph-block ceph-filesystem"
+      changed_when: false
+      when: csi_under_test == 'rook_ceph'
+
+    - name: Check that the Headlamp deployment is available
+      ansible.builtin.command: "kubectl --kubeconfig={{ kubeconfig_path }} -n headlamp get deployment headlamp -o jsonpath={.status.availableReplicas}"
+      register: headlamp_replicas
+      changed_when: false
+      failed_when: headlamp_replicas.stdout | int < 1

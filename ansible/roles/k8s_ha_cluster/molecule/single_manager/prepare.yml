@@ -1,0 +1,7 @@
+---
+- name: Prepare
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - lxd_machine_provision

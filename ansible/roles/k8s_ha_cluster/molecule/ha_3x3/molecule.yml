@@ -1,0 +1,81 @@
+---
+# Full HA topology: 3 managers + 3 workers, matching base/02+03 exactly.
+# Same reasoning as molecule/default/molecule.yml (real host, driver
+# "default", provisioned via lxd_machine_provision in prepare.yml).
+driver:
+  name: default
+
+platforms:
+  - name: localhost
+
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+  inventory:
+    hosts:
+      all:
+        hosts:
+          localhost:
+            ansible_connection: local
+        children:
+          k8s_nodes:
+            children:
+              first_manager:
+                hosts:
+                  molecule-ha3x3-manager1:
+                    ansible_host: 10.207.154.130
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              additional_managers:
+                hosts:
+                  molecule-ha3x3-manager2:
+                    ansible_host: 10.207.154.131
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+                  molecule-ha3x3-manager3:
+                    ansible_host: 10.207.154.132
+                    lxd_cpu: 2
+                    lxd_mem: 3GB
+                    lxd_disk: 20GB
+              workers:
+                hosts:
+                  molecule-ha3x3-worker1:
+                    ansible_host: 10.207.154.133
+                    lxd_cpu: 2
+                    lxd_mem: 2GB
+                    lxd_disk: 15GB
+                  molecule-ha3x3-worker2:
+                    ansible_host: 10.207.154.134
+                    lxd_cpu: 2
+                    lxd_mem: 2GB
+                    lxd_disk: 15GB
+                  molecule-ha3x3-worker3:
+                    ansible_host: 10.207.154.135
+                    lxd_cpu: 2
+                    lxd_mem: 2GB
+                    lxd_disk: 15GB
+          molecule_ssh_group:
+            children:
+              first_manager:
+              additional_managers:
+              workers:
+    group_vars:
+      molecule_ssh_group:
+        ansible_user: root
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

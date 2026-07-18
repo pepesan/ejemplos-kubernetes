@@ -1,0 +1,26 @@
+---
+# kubeadm taints the control-plane node with node-role.kubernetes.io/control-plane:NoSchedule by
+# default — correct for real multi-node clusters (workloads should prefer dedicated workers), but on a
+# single-node cluster (no additional managers, no workers at all) that taint leaves nowhere for any
+# workload to schedule. Found live via the CNI×CSI×topology matrix sweep: Longhorn and Rook Ceph both
+# failed on the single_manager topology because of exactly this. Removed only in that specific case —
+# every other topology keeps the taint as kubeadm intends.
+- name: Determine whether this is a single-node cluster (no additional managers, no workers)
+  ansible.builtin.set_fact:
+    k8s_ha_cluster_is_single_node: >-
+      {{ (groups[k8s_ha_cluster_additional_managers_group] | default([]) | length == 0)
+         and (groups[k8s_ha_cluster_workers_group] | default([]) | length == 0) }}
+  run_once: true
+
+- name: Remove the control-plane NoSchedule taint on single-node clusters
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} taint node
+    {{ groups[k8s_ha_cluster_first_manager_group][0] }} node-role.kubernetes.io/control-plane:NoSchedule-
+  register: untaint_out
+  failed_when:
+    - untaint_out.rc != 0
+    - "'not found' not in untaint_out.stderr"
+  changed_when: "'untainted' in untaint_out.stdout"
+  when: k8s_ha_cluster_is_single_node | bool
+  delegate_to: localhost
+  run_once: true

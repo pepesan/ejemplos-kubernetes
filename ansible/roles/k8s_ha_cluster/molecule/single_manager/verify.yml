@@ -1,0 +1,48 @@
+---
+- name: Verify
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    csi_under_test: "{{ lookup('env', 'K8S_HA_CLUSTER_TEST_CSI') | default('none', true) }}"
+  tasks:
+    - name: Check that the control-plane VIP responds on the API port
+      ansible.builtin.wait_for:
+        host: "10.207.154.141"
+        port: 6443
+        timeout: 10
+
+    # Found live via the CNI×CSI×topology matrix sweep: this topology's
+    # converge finishes right after CNI install (no managers/workers to
+    # join afterward), which can leave the node still transitioning to
+    # Ready by the time this check runs — every other topology's extra
+    # join steps happen to give the CNI enough time to settle first,
+    # masking that this check was never actually robust. Retry instead of
+    # checking once.
+    - name: Get cluster nodes
+      ansible.builtin.command: "kubectl --kubeconfig={{ kubeconfig_path }} get nodes -o json"
+      register: nodes_out
+      until: >
+        (nodes_out.stdout | from_json)['items'] | length == 1 and
+        (nodes_out.stdout | from_json)['items'] | map(attribute='status.conditions') | map('selectattr', 'type', 'eq', 'Ready') | map('map', attribute='status') | map('first') | unique == ['True']
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Assert the single node is Ready
+      ansible.builtin.assert:
+        that:
+          - (nodes_out.stdout | from_json)['items'] | length == 1
+          - (nodes_out.stdout | from_json)['items'] | map(attribute='status.conditions') | map('selectattr', 'type', 'eq', 'Ready') | map('map', attribute='status') | map('first') | unique == ['True']
+        fail_msg: "The single manager node does not report Ready."
+
+    - name: Check that the Longhorn StorageClass was created
+      ansible.builtin.command: "kubectl --kubeconfig={{ kubeconfig_path }} get storageclass longhorn"
+      changed_when: false
+      when: csi_under_test == 'longhorn'
+
+    - name: Check that the Rook Ceph StorageClasses were created
+      ansible.builtin.command: "kubectl --kubeconfig={{ kubeconfig_path }} get storageclass ceph-block ceph-filesystem"
+      changed_when: false
+      when: csi_under_test == 'rook_ceph'

@@ -1,0 +1,18 @@
+---
+# Forbidden-parameterization checks: fail immediately, before touching any
+# node, rather than letting the cluster half-converge and then hang for
+# minutes on something that was never going to work. Found live via the
+# CNI×CSI×topology matrix sweep.
+- name: Refuse rook_ceph on topologies with fewer than 3 workers
+  ansible.builtin.fail:
+    msg: >-
+      k8s_ha_cluster_csi=rook_ceph is not supported on this topology: Rook Ceph's mon.count is
+      fixed at 3, and mon pods can't schedule on the tainted control-plane nodes, so it needs at
+      least 3 worker nodes to ever reach quorum. This inventory only has
+      {{ groups[k8s_ha_cluster_workers_group] | default([]) | length }}
+      ({{ k8s_ha_cluster_workers_group }}). Use k8s_ha_cluster_csi=longhorn or =none instead, or
+      add more workers.
+  when:
+    - k8s_ha_cluster_csi == 'rook_ceph'
+    - (groups[k8s_ha_cluster_workers_group] | default([]) | length) < 3
+  run_once: true

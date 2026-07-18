@@ -1,0 +1,12 @@
+---
+# Ported from ansible/base/02_k8s_base_ha_3_managers_3_workers/06_inicializar_primer_manager.yml
+# ("Instalar CNI Flannel" task), run once against the freshly fetched
+# kubeconfig instead of via SSH on the first manager.
+- name: Install the Flannel CNI
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} apply
+    -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+  register: flannel_install
+  changed_when: "'created' in flannel_install.stdout or 'configured' in flannel_install.stdout"
+  delegate_to: localhost
+  run_once: true

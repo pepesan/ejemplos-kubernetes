@@ -1,0 +1,57 @@
+---
+# Inventory group names. Default to the exact literal names already used
+# across every base lab's inventory.ini (control_plane/workers under
+# k8s_nodes, first_manager, additional_managers) so pointing this role at an
+# existing lab inventory needs zero changes.
+k8s_ha_cluster_nodes_group: k8s_nodes
+k8s_ha_cluster_first_manager_group: first_manager
+k8s_ha_cluster_additional_managers_group: additional_managers
+k8s_ha_cluster_workers_group: workers
+
+# Kubernetes version (pkgs.k8s.io repository) and pod network CIDR. Same
+# values already proven across every base lab.
+k8s_major_version: "v1.36"
+k8s_pod_network_cidr: "10.244.0.0/16"
+
+# kube-vip HA endpoint for the control plane. k8s_vip_address/interface have
+# no safe default (network-specific) and must be set by the caller.
+k8s_vip_port: 6443
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+
+# Where the fetched admin kubeconfig, join command and certificate-key get
+# saved on the control node, and read back from for every task that talks
+# to the cluster via delegate_to: localhost.
+k8s_ha_cluster_kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
+
+# CNI implementation: "flannel" or "cilium". Selects tasks/cni/<name>.yml.
+k8s_ha_cluster_cni: flannel
+# Pinned to the exact version already live-validated in base/08 (and reused
+# identically by labs 10-14) rather than the newer version available upstream.
+k8s_ha_cluster_cilium_version: "1.19.5"
+
+# CSI/storage backend: "none", "longhorn" or "rook_ceph". Selects
+# tasks/csi/<name>.yml, skipped entirely when "none" (matches base/02, the
+# plainest HA cluster lab — a sensible default for a general-purpose role).
+k8s_ha_cluster_csi: none
+
+# Longhorn. Dedicated workload/storage node pools are optional: both default
+# to the general workers group (every worker does both compute and storage)
+# unless the caller defines separate pool groups in their inventory,
+# generalizing base/03's hard requirement for two distinct groups into an
+# opt-in.
+k8s_ha_cluster_longhorn_chart_version: "1.12.0"
+k8s_ha_cluster_longhorn_workload_group: "{{ k8s_ha_cluster_workers_group }}"
+k8s_ha_cluster_longhorn_storage_group: "{{ k8s_ha_cluster_workers_group }}"
+
+# Rook Ceph. base/04's own group_vars never actually defined these two (a
+# pre-existing bug in that lab, left unfixed there) — resolved here to real,
+# current values via "helm search repo" / "helm show values" instead.
+k8s_ha_cluster_rook_ceph_chart_version: "v1.20.2"
+k8s_ha_cluster_ceph_csi_chart_version: "1.0.4"
+k8s_ha_cluster_ceph_image: "quay.io/ceph/ceph:v20.2.2"
+k8s_ha_cluster_rook_values_path: "{{ inventory_dir }}/rook-cluster-values.yaml"
+
+# Headlamp dashboard, toggleable. Defaults to true, matching every existing
+# base lab (which always installs it).
+k8s_ha_cluster_headlamp_enabled: true
+k8s_ha_cluster_headlamp_chart_version: "0.43.0"

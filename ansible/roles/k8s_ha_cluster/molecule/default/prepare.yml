@@ -1,0 +1,10 @@
+---
+# Provisions the 3 throwaway VMs via lxd_machine_provision (already tested
+# on its own — no need to duplicate its instance-creation/SSH-wait logic
+# here), against the k8s_nodes group defined in molecule.yml's inventory.
+- name: Prepare
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - lxd_machine_provision

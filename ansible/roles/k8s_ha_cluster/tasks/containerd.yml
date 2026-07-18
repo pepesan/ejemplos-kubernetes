@@ -1,0 +1,53 @@
+---
+# Ported from ansible/base/02_k8s_base_ha_3_managers_3_workers/04_instalar_containerd.yml,
+# split into an OS-family dispatch (containerd_debian.yml/containerd_redhat.yml
+# — the package/repo steps differ) followed by the already OS-agnostic
+# config-generation/service steps below, unchanged.
+- name: Install and configure containerd (CRI)
+  when: inventory_hostname in groups[k8s_ha_cluster_nodes_group]
+  block:
+    - name: Install containerd (Debian family)
+      ansible.builtin.include_tasks: containerd_debian.yml
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Install containerd (RedHat family)
+      ansible.builtin.include_tasks: containerd_redhat.yml
+      when: ansible_facts.os_family == 'RedHat'
+
+    - name: Create the containerd configuration directory
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: "0755"
+
+    - name: Generate containerd's default configuration
+      ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+      register: containerd_config_gen
+
+    - name: Enable SystemdCgroup in containerd's configuration
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+      register: containerd_config_replace
+
+    - name: Enable the CRI plugin in containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'disabled_plugins = \["cri"\]'
+        replace: 'disabled_plugins = []'
+      register: containerd_cri_enable
+
+    - name: Start and enable the containerd service
+      ansible.builtin.systemd:
+        name: containerd
+        state: started
+        enabled: true
+
+    - name: Restart containerd if its configuration changed
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+      when: containerd_config_gen.changed or containerd_config_replace.changed or containerd_cri_enable.changed

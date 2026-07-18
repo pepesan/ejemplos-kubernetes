@@ -1,0 +1,13 @@
+---
+- name: Converge
+  hosts: k8s_nodes
+  vars:
+    k8s_vip_address: "10.207.154.136"
+    k8s_vip_interface: enp5s0
+    # Overridable via env vars by molecule/run_matrix.sh — see molecule/default/converge.yml.
+    k8s_ha_cluster_cni: "{{ lookup('env', 'K8S_HA_CLUSTER_TEST_CNI') | default('flannel', true) }}"
+    k8s_ha_cluster_csi: "{{ lookup('env', 'K8S_HA_CLUSTER_TEST_CSI') | default('longhorn', true) }}"
+    k8s_ha_cluster_headlamp_enabled: true
+    k8s_ha_cluster_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+  roles:
+    - k8s_ha_cluster

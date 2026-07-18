@@ -1,0 +1,31 @@
+---
+galaxy_info:
+  role_name: k8s_ha_cluster
+  namespace: ejemplos_kubernetes
+  description: >-
+    Turns a set of already-provisioned LXD instances into a working HA
+    Kubernetes cluster: OS prep, containerd, kubeadm tools, kubeadm
+    init/join with kube-vip, a swappable CNI (Flannel/Cilium), an optional
+    swappable CSI/storage backend (Longhorn/Rook Ceph) and an optional
+    Headlamp dashboard.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "24.04"
+        - "26.04"
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+    - name: Rocky
+      versions:
+        - "9"
+        - "10"
+    - name: Fedora
+      versions:
+        - "43"
+        - "44"
+
+dependencies: []

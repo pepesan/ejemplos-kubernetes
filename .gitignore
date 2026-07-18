@@ -1,3 +1,10 @@
 .idea/*
 ejemplos-kubernetes.iml
 *.tgz
+.aider*
+
+# Private, per-machine agent instructions and planning notes — not shared repo state.
+/PLAN.md
+/CLAUDE.md
+/AGENTS.md
+/.agents/

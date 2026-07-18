@@ -1,0 +1,47 @@
+---
+# Ported from ansible/base/08_k8s_gateway_api/06_inicializar_primer_manager.yml
+# (live-validated there, and reused identically by labs 10-14), minus the
+# Gateway-API CRDs and L2Announcement/LB-IPAM bits — those are Gateway
+# API/LoadBalancer extras layered on top in that lab, orthogonal to "Cilium
+# as CNI", and out of scope here.
+- name: Remove kube-proxy (Cilium replaces it entirely)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    state: absent
+    kind: "{{ item.kind }}"
+    name: kube-proxy
+    namespace: kube-system
+  loop:
+    - { kind: DaemonSet }
+    - { kind: ConfigMap }
+  delegate_to: localhost
+  run_once: true
+
+- name: Add the Cilium Helm repository
+  kubernetes.core.helm_repository:
+    name: cilium
+    repo_url: https://helm.cilium.io/
+  delegate_to: localhost
+  run_once: true
+
+- name: Install Cilium as CNI (with kube-proxy replacement)
+  kubernetes.core.helm:
+    name: cilium
+    chart_ref: cilium/cilium
+    chart_version: "{{ k8s_ha_cluster_cilium_version }}"
+    release_namespace: kube-system
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    timeout: 5m0s
+    values:
+      k8sServiceHost: "{{ k8s_vip_address }}"
+      k8sServicePort: "{{ k8s_vip_port }}"
+      kubeProxyReplacement: true
+  delegate_to: localhost
+  run_once: true
+
+- name: Wait for the Cilium DaemonSet to be ready
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} -n kube-system rollout status daemonset/cilium --timeout=180s
+  changed_when: false
+  delegate_to: localhost
+  run_once: true

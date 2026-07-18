@@ -1,0 +1,93 @@
+---
+# Ported from ansible/base/02_k8s_base_ha_3_managers_3_workers/09_desplegar_headlamp.yml.
+- name: Add the Headlamp Helm repository
+  kubernetes.core.helm_repository:
+    name: headlamp
+    repo_url: https://kubernetes-sigs.github.io/headlamp/
+  delegate_to: localhost
+  run_once: true
+
+- name: Install Headlamp via Helm in the headlamp namespace
+  kubernetes.core.helm:
+    name: headlamp
+    chart_ref: headlamp/headlamp
+    chart_version: "{{ k8s_ha_cluster_headlamp_chart_version }}"
+    release_namespace: headlamp
+    create_namespace: true
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    values:
+      service:
+        type: NodePort
+        nodePort: 32082
+  delegate_to: localhost
+  run_once: true
+
+- name: Wait for the Headlamp deployment to be ready
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} rollout status deployment/headlamp -n headlamp --timeout=90s
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Create a ServiceAccount and ClusterRoleBinding for Headlamp
+  kubernetes.core.k8s:
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    state: present
+    definition:
+      - apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: headlamp-admin
+          namespace: headlamp
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: headlamp-admin-binding
+        subjects:
+          - kind: ServiceAccount
+            name: headlamp-admin
+            namespace: headlamp
+        roleRef:
+          kind: ClusterRole
+          name: cluster-admin
+          apiGroup: rbac.authorization.k8s.io
+  delegate_to: localhost
+  run_once: true
+
+- name: Check whether the Headlamp token file already exists
+  ansible.builtin.stat:
+    path: "{{ inventory_dir }}/headlamp_token.txt"
+  register: token_file_status
+  delegate_to: localhost
+  run_once: true
+
+- name: Get an access token for Headlamp (valid for 1 year)
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} create token headlamp-admin -n headlamp --duration=8760h
+  register: token_out
+  changed_when: false
+  when: not token_file_status.stat.exists
+  delegate_to: localhost
+  run_once: true
+
+- name: Save the Headlamp token to a local file
+  ansible.builtin.copy:
+    content: "{{ token_out.stdout }}"
+    dest: "{{ inventory_dir }}/headlamp_token.txt"
+    mode: "0600"
+  when: not token_file_status.stat.exists
+  delegate_to: localhost
+  run_once: true
+
+- name: Show Headlamp access details
+  ansible.builtin.debug:
+    msg:
+      - "════════════════════════════════════════════════════════════════"
+      - "  HEADLAMP DASHBOARD INSTALLED SUCCESSFULLY"
+      - "  "
+      - "  Access URL (via VIP): http://{{ k8s_vip_address }}:32082"
+      - "  "
+      - "  The admin access token has been saved to:"
+      - "  {{ inventory_dir }}/headlamp_token.txt"
+      - "════════════════════════════════════════════════════════════════"
+  run_once: true

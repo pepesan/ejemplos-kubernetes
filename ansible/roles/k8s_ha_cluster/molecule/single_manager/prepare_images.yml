@@ -1,0 +1,40 @@
+---
+# Imports one VM-format test image per distro this role claims to support
+# (meta/main.yml), skipping any already present. VM format (not container):
+# unlike lxd_host_bootstrap's package-only smoke test, this role runs a real
+# kubeadm/containerd cluster, which needs genuine virtualization the same
+# way lxd_machine_provision's normal usage does.
+- name: Import VM-format distro test images
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    distro_test_images:
+      - alias: k8s-ha-test-ubuntu-2404
+        remote_image: "ubuntu:24.04"
+      - alias: k8s-ha-test-ubuntu-2604
+        remote_image: "ubuntu:26.04"
+      - alias: k8s-ha-test-debian-12
+        remote_image: "images:debian/12"
+      - alias: k8s-ha-test-debian-13
+        remote_image: "images:debian/13"
+      - alias: k8s-ha-test-rocky-9
+        remote_image: "images:rockylinux/9"
+      - alias: k8s-ha-test-fedora-43
+        remote_image: "images:fedora/43"
+      - alias: k8s-ha-test-fedora-44
+        remote_image: "images:fedora/44"
+  tasks:
+    - name: List local LXD images
+      ansible.builtin.command: lxc image list -f csv -c l
+      register: lxd_local_images
+      changed_when: false
+
+    - name: Import each distro test image, if not already present
+      ansible.builtin.command: >
+        lxc image copy {{ item.remote_image }} local: --vm --alias {{ item.alias }}
+      loop: "{{ distro_test_images }}"
+      loop_control:
+        label: "{{ item.alias }}"
+      when: item.alias not in lxd_local_images.stdout_lines
+      changed_when: true

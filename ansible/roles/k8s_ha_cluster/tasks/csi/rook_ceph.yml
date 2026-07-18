@@ -1,0 +1,379 @@
+---
+# Ported from ansible/base/04_k8s_ha_almacenamiento_persistente_rook_ceph/10_desplegar_rook_ceph.yml.
+# chart_version/ceph_image resolved to real, current values in
+# defaults/main.yml (that base lab's own group_vars never actually defined
+# them — a pre-existing bug there, not fixed as part of this role).
+- name: Add the Rook Helm repository
+  kubernetes.core.helm_repository:
+    name: rook-release
+    repo_url: https://charts.rook.io/release
+  delegate_to: localhost
+  run_once: true
+
+- name: Create the rook-ceph namespace if missing
+  kubernetes.core.k8s:
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: rook-ceph
+  delegate_to: localhost
+  run_once: true
+
+- name: Raise mon_max_pg_per_osd for lab clusters with few OSDs
+  kubernetes.core.k8s:
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: rook-config-override
+        namespace: rook-ceph
+      data:
+        config: |
+          [global]
+          mon_max_pg_per_osd = 400
+  delegate_to: localhost
+  run_once: true
+
+- name: Install or upgrade the Rook Ceph operator via Helm
+  kubernetes.core.helm:
+    name: rook-ceph
+    chart_ref: rook-release/rook-ceph
+    chart_version: "{{ k8s_ha_cluster_rook_ceph_chart_version }}"
+    release_namespace: rook-ceph
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    values:
+      crds:
+        enabled: true
+  delegate_to: localhost
+  run_once: true
+
+- name: Wait for the Rook Ceph operator to be ready
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} rollout status deployment/rook-ceph-operator -n rook-ceph --timeout=180s
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Add the Ceph CSI Operator Helm repository
+  kubernetes.core.helm_repository:
+    name: ceph-csi-operator
+    repo_url: https://ceph.github.io/ceph-csi-operator
+  delegate_to: localhost
+  run_once: true
+
+- name: Install or upgrade the Ceph CSI controllers and plugins via Helm
+  kubernetes.core.helm:
+    name: ceph-csi-drivers
+    chart_ref: ceph-csi-operator/ceph-csi-drivers
+    chart_version: "{{ k8s_ha_cluster_ceph_csi_chart_version }}"
+    release_namespace: rook-ceph
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    values:
+      operatorConfig:
+        namespace: rook-ceph
+        driverSpecDefaults:
+          imageSet:
+            name: rook-csi-operator-image-set-configmap
+          nodePlugin:
+            priorityClassName: system-node-critical
+          controllerPlugin:
+            priorityClassName: system-cluster-critical
+      drivers:
+        rbd:
+          enabled: true
+          name: rook-ceph.rbd.csi.ceph.com
+        cephfs:
+          enabled: true
+          name: rook-ceph.cephfs.csi.ceph.com
+        nfs:
+          enabled: false
+        nvmeof:
+          enabled: false
+  delegate_to: localhost
+  run_once: true
+
+    # Left on disk after Helm install (not deleted) — a copy+delete cycle on
+    # every run always reported "changed" (found live via the idempotence
+    # check), since the file never existed at the start of the next run.
+    # ansible.builtin.copy is itself idempotent by content, so leaving it in
+    # place makes this step correctly report unchanged on a second run.
+- name: Write the values file for the Rook Ceph cluster
+  ansible.builtin.copy:
+    dest: "{{ k8s_ha_cluster_rook_values_path }}"
+    content: |
+      operatorNamespace: rook-ceph
+
+      cephClusterSpec:
+        cephVersion:
+          image: "{{ k8s_ha_cluster_ceph_image }}"
+        dataDirHostPath: /var/lib/rook
+        mon:
+          count: 3
+          allowMultiplePerNode: false
+        mgr:
+          count: 1
+        dashboard:
+          enabled: true
+          ssl: false
+        storage:
+          useAllNodes: true
+          useAllDevices: true
+          config:
+            databaseSizeMB: "1024"
+            journalSizeMB: "1024"
+        resources:
+          mgr:
+            limits:
+              memory: "1Gi"
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+          mon:
+            limits:
+              memory: "1Gi"
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+          osd:
+            limits:
+              memory: "2Gi"
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+          prepareosd:
+            requests:
+              cpu: "100m"
+              memory: "50Mi"
+          mgr-sidecar:
+            limits:
+              memory: "100Mi"
+            requests:
+              cpu: "50m"
+              memory: "40Mi"
+          crashcollector:
+            limits:
+              memory: "60Mi"
+            requests:
+              cpu: "50m"
+              memory: "60Mi"
+          logcollector:
+            limits:
+              memory: "250Mi"
+            requests:
+              cpu: "50m"
+              memory: "50Mi"
+
+      cephBlockPools:
+        - name: ceph-blockpool
+          spec:
+            failureDomain: host
+            replicated:
+              size: 3
+          storageClass:
+            enabled: true
+            name: ceph-block
+            isDefault: true
+            reclaimPolicy: Delete
+            allowVolumeExpansion: true
+            parameters:
+              imageFormat: "2"
+              imageFeatures: layering
+              csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
+              csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+              csi.storage.k8s.io/controller-expand-secret-name: rook-csi-rbd-provisioner
+              csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+              csi.storage.k8s.io/controller-publish-secret-name: rook-csi-rbd-provisioner
+              csi.storage.k8s.io/controller-publish-secret-namespace: rook-ceph
+              csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
+              csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+              csi.storage.k8s.io/fstype: ext4
+
+      cephFileSystems:
+        - name: ceph-filesystem
+          spec:
+            metadataPool:
+              replicated:
+                size: 3
+            dataPools:
+              - name: data0
+                failureDomain: host
+                replicated:
+                  size: 3
+            metadataServer:
+              activeCount: 1
+              activeStandby: true
+          storageClass:
+            # Don't let the chart create the StorageClass: with ceph-csi-operator
+            # (chart versions pinned in defaults/main.yml), the CephFS
+            # StorageClass needs the clusterID of the ClientProfile the
+            # operator creates asynchronously after the cluster comes up —
+            # it doesn't exist yet at Helm-install time, so it's created
+            # below once the ClientProfile has actually appeared. Found live
+            # (2026-07-18) that this version's operator creates exactly one
+            # ClientProfile per cluster (no per-subvolume-group split, and
+            # no "subVolumeGroup" field on it at all) — the wait below just
+            # grabs whichever one exists, not a name/field match.
+            enabled: false
+    mode: '0644'
+  delegate_to: localhost
+  run_once: true
+
+- name: Install or upgrade the Rook Ceph cluster via Helm
+  kubernetes.core.helm:
+    name: rook-ceph-cluster
+    chart_ref: rook-release/rook-ceph-cluster
+    chart_version: "{{ k8s_ha_cluster_rook_ceph_chart_version }}"
+    release_namespace: rook-ceph
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    values_files:
+      - "{{ k8s_ha_cluster_rook_values_path }}"
+    server_side: true
+    force_conflicts: true
+  delegate_to: localhost
+  run_once: true
+
+- name: Wait for the Ceph MGR and MON pods to be ready (retrying until created)
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} wait --namespace rook-ceph
+    --for=condition=ready pod -l app=rook-ceph-mon --timeout=300s
+  register: wait_mon
+  until: wait_mon.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Wait for the ceph-block StorageClass to be provisioned
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} get storageclass ceph-block
+  register: sc_out
+  until: sc_out.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Wait for the ceph-csi ClientProfile to be created
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} -n rook-ceph get clientprofile
+    -o jsonpath='{.items[0].metadata.name}'
+  register: cephfs_client_profile
+  until: cephfs_client_profile.stdout | trim | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Create the ceph-filesystem StorageClass pointing at the right ClientProfile
+  kubernetes.core.k8s:
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: ceph-filesystem
+      provisioner: rook-ceph.cephfs.csi.ceph.com
+      reclaimPolicy: Delete
+      allowVolumeExpansion: true
+      parameters:
+        clusterID: "{{ cephfs_client_profile.stdout | trim }}"
+        fsName: ceph-filesystem
+        pool: ceph-filesystem-data0
+        csi.storage.k8s.io/provisioner-secret-name: rook-csi-cephfs-provisioner
+        csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+        csi.storage.k8s.io/controller-expand-secret-name: rook-csi-cephfs-provisioner
+        csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+        csi.storage.k8s.io/controller-publish-secret-name: rook-csi-cephfs-provisioner
+        csi.storage.k8s.io/controller-publish-secret-namespace: rook-ceph
+        csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
+        csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+  delegate_to: localhost
+  run_once: true
+
+- name: Wait for the Ceph Dashboard password secret to be created
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} -n rook-ceph get secret rook-ceph-dashboard-password
+  register: secret_check
+  until: secret_check.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Expose the Ceph Dashboard as NodePort on port 32070
+  kubernetes.core.k8s:
+    kubeconfig: "{{ k8s_ha_cluster_kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        # Not reusing the "rook-ceph-mgr-dashboard" name: the Rook operator
+        # owns and reconciles that Service (ownerReference to CephCluster),
+        # so any NodePort change we make to it gets reverted back to
+        # ClusterIP on the next reconcile. A separate Service with the same
+        # selector avoids that.
+        name: rook-ceph-mgr-dashboard-external
+        namespace: rook-ceph
+      spec:
+        type: NodePort
+        ports:
+          - name: http-dashboard
+            port: 7000
+            targetPort: 7000
+            nodePort: 32070
+        selector:
+          app: rook-ceph-mgr
+          mgr_role: active
+          rook_cluster: rook-ceph
+  delegate_to: localhost
+  run_once: true
+
+- name: Get the Ceph Dashboard admin password
+  ansible.builtin.command: >
+    kubectl --kubeconfig={{ k8s_ha_cluster_kubeconfig_path }} -n rook-ceph get secret rook-ceph-dashboard-password -o jsonpath="{.data.password}"
+  register: ceph_password_raw
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Decode the Ceph Dashboard password
+  ansible.builtin.set_fact:
+    ceph_dashboard_password: "{{ ceph_password_raw.stdout | ansible.builtin.b64decode }}"
+  run_once: true
+
+- name: Save the Ceph Dashboard password to a local file
+  ansible.builtin.copy:
+    content: "{{ ceph_dashboard_password }}"
+    dest: "{{ inventory_dir }}/ceph_dashboard_password.txt"
+    mode: "0600"
+  delegate_to: localhost
+  run_once: true
+
+- name: Show success details
+  ansible.builtin.debug:
+    msg:
+      - "════════════════════════════════════════════════════════════════"
+      - "  ROOK CEPH OPERATOR AND CLUSTER DEPLOYED SUCCESSFULLY"
+      - "  "
+      - "  StorageClasses created:"
+      - "    - 'ceph-block' (RBD / RWO) [Default]"
+      - "    - 'ceph-filesystem' (CephFS / RWX)"
+      - "  "
+      - "  CEPH DASHBOARD:"
+      - "    - URL: http://{{ k8s_vip_address }}:32070"
+      - "    - User: admin"
+      - "    - Password saved to: {{ inventory_dir }}/ceph_dashboard_password.txt"
+      - "════════════════════════════════════════════════════════════════"
+  run_once: true

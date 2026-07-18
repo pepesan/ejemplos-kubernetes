@@ -1,0 +1,49 @@
+---
+- name: Fail fast on unsupported CNI/CSI/topology combinations
+  ansible.builtin.import_tasks: preflight_checks.yml
+  tags: [preflight_checks]
+
+- name: Prepare the operating system on every cluster node
+  ansible.builtin.import_tasks: os_prepare.yml
+  tags: [os_prepare]
+
+- name: Install and configure containerd on every cluster node
+  ansible.builtin.import_tasks: containerd.yml
+  tags: [containerd]
+
+- name: Install kubeadm/kubelet/kubectl on every cluster node
+  ansible.builtin.import_tasks: k8s_tools.yml
+  tags: [k8s_tools]
+
+- name: Initialize the first control-plane node
+  ansible.builtin.import_tasks: control_plane_init.yml
+  tags: [control_plane_init]
+
+# Installed right after the first manager's kubeadm init and before any
+# other node joins, matching the base lab's original step order (the CNI
+# was installed inline as part of initializing the first manager).
+- name: Install the selected CNI
+  ansible.builtin.include_tasks: "cni/{{ k8s_ha_cluster_cni }}.yml"
+  tags: [cni]
+
+- name: Remove the control-plane taint on single-node clusters
+  ansible.builtin.import_tasks: single_node_taint.yml
+  tags: [single_node_taint]
+
+- name: Join the remaining control-plane nodes
+  ansible.builtin.import_tasks: control_plane_join.yml
+  tags: [control_plane_join]
+
+- name: Join the worker nodes
+  ansible.builtin.import_tasks: workers_join.yml
+  tags: [workers_join]
+
+- name: Install the selected CSI/storage backend
+  ansible.builtin.include_tasks: "csi/{{ k8s_ha_cluster_csi }}.yml"
+  when: k8s_ha_cluster_csi != 'none'
+  tags: [csi]
+
+- name: Deploy the Headlamp dashboard
+  ansible.builtin.import_tasks: headlamp.yml
+  when: k8s_ha_cluster_headlamp_enabled
+  tags: [headlamp]

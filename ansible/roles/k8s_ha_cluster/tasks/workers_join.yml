@@ -1,0 +1,24 @@
+---
+# Ported from ansible/base/02_k8s_base_ha_3_managers_3_workers/08_unir_workers.yml.
+- name: Join the worker nodes
+  when: inventory_hostname in groups[k8s_ha_cluster_workers_group] | default([])
+  block:
+    - name: Check whether this node already belongs to the cluster
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Read the join command from the local file
+      ansible.builtin.set_fact:
+        k8s_join_command: "{{ lookup('file', inventory_dir + '/join_command.txt') }}"
+
+    - name: Join the worker node to the control plane (via the VIP)
+      ansible.builtin.command: "{{ k8s_join_command }} --ignore-preflight-errors=SystemVerification,Swap"
+      register: join_output
+      when: not kubelet_conf.stat.exists
+      changed_when: true
+
+    - name: Show the join result
+      ansible.builtin.debug:
+        var: join_output.stdout_lines
+      when: not kubelet_conf.stat.exists
