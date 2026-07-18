@@ -1,7 +1,20 @@
 ---
+- name: Load the OS-family-specific package list
+  ansible.builtin.include_vars: "{{ ansible_facts.os_family }}.yml"
+
+# snapd/python3-kubernetes/python3-jsonpatch aren't in the base RHEL-family
+# repos — Fedora carries them in its own repos already, but Rocky/RHEL/
+# CentOS need EPEL enabled first (confirmed live: without this, the next
+# task fails to resolve those package names on Rocky 9).
+- name: Enable the EPEL repository (Rocky/RHEL/CentOS only, not Fedora)
+  ansible.builtin.dnf:
+    name: epel-release
+    state: present
+  when: ansible_facts.os_family == 'RedHat' and ansible_facts.distribution != 'Fedora'
+
 - name: Install system dependencies (snapd, curl, Python libraries)
-  ansible.builtin.apt:
-    name: "{{ lxd_apt_packages }}"
+  ansible.builtin.package:
+    name: "{{ lxd_system_packages }}"
     state: present
     update_cache: true
 

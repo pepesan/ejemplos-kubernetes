@@ -34,7 +34,11 @@
     # raw shell commands (including fact gathering). Ubuntu's cloud images
     # ship python3 already; Debian's minimal container images don't
     # (confirmed live: "gather_facts" failed with "python3: not found").
+    # Rocky/Fedora ship python3 out of the box, but the check is kept
+    # generic (try apt, fall back to dnf) rather than branching per distro.
     - name: Ensure python3 is present in each container (Debian's minimal images lack it)
-      ansible.builtin.command: "lxc exec {{ item }} -- sh -c 'apt-get update && apt-get install -y python3'"
+      ansible.builtin.command: >
+        lxc exec {{ item }} -- sh -c
+        'command -v python3 || (apt-get update && apt-get install -y python3) || dnf install -y python3'
       loop: "{{ groups['distro_test_nodes'] }}"
       changed_when: true

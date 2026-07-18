@@ -17,13 +17,9 @@ lxd_ssh_key_comment: "lxd-lab-host-key"
 
 # System packages required on the host: snapd (to install lxd/kubectl/helm),
 # curl, and the Python libraries the kubernetes.core collection needs to
-# talk to a cluster's API without shelling out to kubectl.
-lxd_apt_packages:
-  - snapd
-  - curl
-  - python3-kubernetes
-  - python3-jsonpatch
-  - python3-yaml
+# talk to a cluster's API without shelling out to kubectl. The actual list
+# (lxd_system_packages) is OS-family-specific — see vars/Debian.yml and
+# vars/RedHat.yml, loaded by tasks/packages.yml.
 
 # Ansible Galaxy collections required by the roles/playbooks that will run
 # against the instances this host provisions.

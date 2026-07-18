@@ -19,6 +19,12 @@
         remote_image: "images:debian/12"
       - alias: test-debian-13
         remote_image: "images:debian/13"
+      - alias: test-rocky-9
+        remote_image: "images:rockylinux/9"
+      - alias: test-fedora-43
+        remote_image: "images:fedora/43"
+      - alias: test-fedora-44
+        remote_image: "images:fedora/44"
   tasks:
     - name: List local LXD images
       ansible.builtin.command: lxc image list -f csv -c l

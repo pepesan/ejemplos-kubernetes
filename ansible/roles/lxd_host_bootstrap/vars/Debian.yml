@@ -1,0 +1,7 @@
+---
+lxd_system_packages:
+  - snapd
+  - curl
+  - python3-kubernetes
+  - python3-jsonpatch
+  - python3-yaml

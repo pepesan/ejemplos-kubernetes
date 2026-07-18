@@ -1,0 +1,11 @@
+---
+# Same package set as Debian.yml, adjusted for the one real name
+# difference on RHEL-family systems: "python3-yaml" is "python3-pyyaml"
+# here. Covers Rocky, RHEL and CentOS as well as Fedora (Ansible reports
+# os_family: RedHat for all of them).
+lxd_system_packages:
+  - snapd
+  - curl
+  - python3-kubernetes
+  - python3-jsonpatch
+  - python3-pyyaml

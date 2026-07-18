@@ -23,7 +23,8 @@ always re-checks upstream).
 
 ## Requirements
 
-- Ubuntu 24.04/26.04 or Debian 12 (bookworm)/13 (trixie) host with `sudo`/root access.
+- Ubuntu 24.04/26.04, Debian 12 (bookworm)/13 (trixie), Rocky Linux 9 (10 once
+  an LXD image is published) or Fedora 43/44 host with `sudo`/root access.
 - Real virtualization support for the `lxd_init` and `base_image` tasks
   (tagged `requires_virtualization`) — these cannot run inside a plain,
   unprivileged container. See `molecule/default/` for how this is tested.
@@ -36,6 +37,19 @@ symlink automatically, Debian's does not — without it, classic-confinement
 snaps (`kubectl`, `helm`) fail to resolve their paths. The role creates
 this symlink itself (`tasks/snap_packages.yml`), so no extra setup is
 needed on Debian.
+
+### A note on Rocky Linux / Fedora (RHEL family)
+
+The package-install task uses the generic `ansible.builtin.package` module
+(auto-detects `dnf`) instead of `ansible.builtin.apt`, and the actual package
+list is loaded per OS family from `vars/RedHat.yml` — identical to the
+Debian list except `python3-yaml` is named `python3-pyyaml` on this family.
+On Rocky/RHEL/CentOS (but not Fedora, whose own repos already carry
+everything needed), the role first enables the EPEL repository
+(`epel-release`), since `snapd`/`python3-kubernetes`/`python3-jsonpatch`
+aren't available otherwise. The classic-snap `/snap` symlink workaround
+described above for Debian applies here too, unconditionally, since
+RHEL-family's `snapd` package doesn't create it either.
 
 ## Role Variables
 
