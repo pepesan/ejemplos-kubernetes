@@ -1,0 +1,9 @@
+cni,topology,result,duration_seconds
+flannel,single_manager,pass,576
+flannel,default,pass,636
+flannel,ha_1x2,pass,571
+flannel,ha_3x3,pass,703
+cilium,single_manager,pass,540
+cilium,default,pass,656
+cilium,ha_1x2,pass,592
+cilium,ha_3x3,pass,807

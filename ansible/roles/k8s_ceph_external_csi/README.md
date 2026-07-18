@@ -77,3 +77,14 @@ same regardless of the k8s cluster's size/HA shape, not just on the one scenario
 Resumable: results already recorded in `../k8s_ceph_external_csi_topology_matrix_results.csv` (at the
 `ansible/roles/` level, alongside every other role's own matrix results) are skipped on a re-run.
 Per-scenario logs land in `molecule/logs/` (gitignored, unlike the results CSV).
+
+```bash
+./molecule/run_cni_matrix.sh
+```
+
+Adds the CNI axis on top: sweeps both `k8s_ha_cluster` CNIs (`flannel`, `cilium`) across all 4 topology
+scenarios (8 combinations), each scenario's `k8s_ha_cluster_cni` overridable via the
+`K8S_CEPH_EXTERNAL_CSI_TEST_CNI` env var (falling back to `flannel` when unset, matching the normal
+non-matrix run). CSI itself isn't swept — it's fixed at "external Ceph" by design, the entire point of
+this role. Full `molecule test` per combination (including native `idempotence`). Resumable: results in
+`../k8s_ceph_external_csi_cni_matrix_results.csv`.

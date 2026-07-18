@@ -9,7 +9,13 @@
   vars:
     k8s_vip_address: "10.207.154.187"
     k8s_vip_interface: enp5s0
-    k8s_ha_cluster_cni: flannel
+    # Overridable via K8S_CEPH_EXTERNAL_CSI_TEST_CNI by molecule/run_cni_matrix.sh,
+    # which loops this scenario (and the other 3) across both CNIs to confirm
+    # the external-Ceph wiring works regardless of CNI choice — CSI itself
+    # isn't swept here since it's fixed at "external Ceph" by design, the
+    # entire point of this role. Default matches this scenario's normal,
+    # non-matrix run.
+    k8s_ha_cluster_cni: "{{ lookup('env', 'K8S_CEPH_EXTERNAL_CSI_TEST_CNI') | default('flannel', true) }}"
     k8s_ha_cluster_csi: none
     k8s_ha_cluster_headlamp_enabled: false
     k8s_ha_cluster_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"

@@ -9,7 +9,8 @@
   vars:
     k8s_vip_address: "10.207.154.175"
     k8s_vip_interface: enp5s0
-    k8s_ha_cluster_cni: flannel
+    # Overridable via K8S_CEPH_EXTERNAL_CSI_TEST_CNI — see default/converge.yml.
+    k8s_ha_cluster_cni: "{{ lookup('env', 'K8S_CEPH_EXTERNAL_CSI_TEST_CNI') | default('flannel', true) }}"
     k8s_ha_cluster_csi: none
     k8s_ha_cluster_headlamp_enabled: false
     k8s_ha_cluster_kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
