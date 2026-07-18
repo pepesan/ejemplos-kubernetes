@@ -11,6 +11,21 @@ Este archivo detalla la secuencia de laboratorios prácticos diseñados para ser
  - Desplegar Headlamp lo antes posible dentro de cada laboratorio (justo después de que el clúster esté formado y el CNI funcionando, antes del resto de despliegues específicos del lab) para poder seguir desde la consola web el resto de despliegues a medida que se ejecutan. Aplicado ya en todos los laboratorios (01-10); renumerados los playbooks afectados en cada uno. Pendiente volver a probar labs 01-07 con el nuevo orden (no re-ejecutados tras el cambio, salvo comprobación de que la renumeración es consistente).
  - Se ha añadido una variable de versión explícita en `group_vars` para todo el software de plataforma Kubernetes en todos los laboratorios (charts de Helm: Headlamp, Longhorn, MetalLB, NGINX Ingress, kube-prometheus-stack, Loki/Promtail, Rook Ceph, ceph-csi-operator, Percona, Cilium; e imágenes clave como `quay.io/ceph/ceph`), en vez de dejar que cada `helm install` tome silenciosamente "lo último disponible" en cada ejecución. No se ha vuelto a probar el arranque completo de los laboratorios 01-07 con las versiones ahora fijadas explícitamente (antes no fijadas) — pendiente de revalidación.
 
+## 🧩 Roles candidatos (backlog, sin implementar)
+
+Tras completar los 14 laboratorios (01-14), hay bastante lógica duplicada o casi idéntica entre ellos que encajaría como roles de Ansible propios, en `ansible/roles/` (directorio de implementación aún no creado). Sin decidir todavía cuándo abordarlo ni con qué alcance (se planteó empezar solo por los de mayor duplicación/menor riesgo antes de ir a por el resto, pero no se ha decidido nada en firme) — de momento es solo la lista de candidatos:
+
+- **`lxd_machine_provision`**: aprovisionamiento de N VMs LXD con unos specs dados (CPU/RAM/disco), independiente de qué se instale luego dentro.
+- **`k8s_ha_cluster`**: dado un conjunto de IPs/pools de máquinas, nº de managers/workers y requisitos por pool, monta el clúster HA completo (VIP de kube-vip) con opciones intercambiables de CNI (Cilium/Flannel), CSI/almacenamiento (Longhorn/Rook Ceph/externo) y Headlamp (activable o no, como una opción más de la instalación del clúster, no como role aparte). Generalizaría de una sola vez varias piezas que hoy están duplicadas sueltas por laboratorio (instalación de Cilium + LB-IPAM, Longhorn hiperconvergente, Headlamp).
+- **`percona_operator`**: patrón genérico "añadir repo Helm + instalar operador + esperar rollout", parametrizado por el nombre del operador (`pxc-operator`, `pg-operator`, `psmdb-operator`).
+- **`generated_secret`**: el patrón repetido de "generar una credencial si no existe ya, guardarla en archivo local con permisos `0600`, nunca en pantalla" (contraseñas de PXC, MongoDB, Vault, `vault_admin`...).
+- **`k8s_node_scale_cycle`**: añadir/unir un nodo nuevo al clúster y drenarlo con seguridad al retirarlo — en particular el workaround del PDB del `instance-manager` de Longhorn antes de un `kubectl drain`, la lección aprendida más repetida de todo el repositorio (escenarios 03, 10-13).
+- **`lxd_host_bootstrap`**: preparar el host físico (LXD, snap, colecciones Galaxy) — ya existe como playbook único y compartido (`ansible/00_bootstrap_host_lxd.yml`, no duplicado por laboratorio), así que convertirlo en role no eliminaría duplicación pero sí aportaría estructura y reutilización fuera de este repo.
+
+**Cada role deberá tener su propio plan de pruebas** (pendiente de definir el detalle cuando se aborde la implementación — candidato natural: Molecule, el framework estándar de testing de roles de Ansible, con un escenario por combinación relevante de opciones, p. ej. `k8s_ha_cluster` probado con Cilium+Longhorn y con Flannel+Rook Ceph por separado), no basta con la validación de dos pasadas de `run_all.sh` que ya se hace a nivel de laboratorio completo.
+
+Aparte, y sin relación con los roles: se propuso también evaluar `ansible-lint` (config + primera pasada de diagnóstico) — tampoco decidido cuándo abordarlo.
+
 ## 🎓 Lecciones Aprendidas (errores recurrentes a no repetir)
 
 Estas son las clases de error que ya han aparecido más de una vez (o que fueron especialmente costosas) a lo largo de varios laboratorios. Antes de escribir una tarea Ansible nueva que encaje en alguno de estos patrones, revisar esta lista.
