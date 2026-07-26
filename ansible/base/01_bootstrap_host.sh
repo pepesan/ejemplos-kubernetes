@@ -3,6 +3,8 @@ set -euo pipefail
 
 # Script para automatizar la inicialización y preparación de LXD en la máquina local
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "════════════════════════════════════════════════════════════════"
 echo "  Iniciando preparación del Host Local (LXD Bootstrap)..."
 echo "  Este script instalará LXD, configurará redes y almacenamiento"
@@ -11,7 +13,7 @@ echo "════════════════════════�
 echo ""
 
 # Ejecutar el playbook de Ansible
-ansible-playbook 00_bootstrap_host_lxd.yml --ask-become-pass
+ansible-playbook "$SCRIPT_DIR/00_bootstrap_host_lxd.yml" --ask-become-pass
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"

@@ -27,8 +27,11 @@ Antes de empezar, solo debes asegurar estos tres requisitos básicos en tu máqu
 
      También puedes usar el script [`00_instalar_ansible.sh`](00_instalar_ansible.sh) de este
      directorio: instala Ansible con pipx (inyectando ya `kubernetes`, `jsonpatch` y `pyyaml`
-     en su venv), instala `kubectl` y `helm` (binarios oficiales) y a continuación lanza
-     `check_requisitos.yml` automáticamente. Es **multidistribución**: probado en vivo en
+     en su venv), instala `kubectl` y `helm` (binarios oficiales), y a continuación lanza
+     `check_requisitos.yml`. Si detecta que LXD todavía no está instalado, encadena
+     automáticamente [`01_bootstrap_host.sh`](01_bootstrap_host.sh) (te pedirá la contraseña
+     de `sudo`) antes de esa comprobación final — en un host completamente nuevo, este único
+     script deja todo listo de principio a fin. Es **multidistribución**: probado en vivo en
      Ubuntu, Debian, Rocky Linux, Fedora y openSUSE (ver
      [`ansible/scripts/test_instalar_ansible_distros.sh`](../scripts/test_instalar_ansible_distros.sh)).
      ```bash

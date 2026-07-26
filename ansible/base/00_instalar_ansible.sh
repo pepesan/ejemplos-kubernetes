@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Script para instalar Ansible en el host vía pipx (aislado del Python del sistema)
-# y lanzar a continuación la comprobación de requisitos previos (check_requisitos.yml).
+# Script para instalar Ansible en el host vía pipx (aislado del Python del sistema),
+# instalar kubectl y helm, y lanzar a continuación la comprobación de requisitos
+# previos (check_requisitos.yml) — encadenando 01_bootstrap_host.sh automáticamente
+# antes si LXD todavía no está instalado.
 #
 # Multidistribución: probado en vivo (contenedores LXD) sobre las 2 últimas versiones
 # estables de Ubuntu, Debian, Rocky Linux (solo 9: no hay imagen de LXD para la 10
@@ -13,6 +15,7 @@ set -euo pipefail
 # no hay LXD real dentro del contenedor de prueba).
 
 SKIP_CHECK_REQUISITOS="${SKIP_CHECK_REQUISITOS:-false}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 run_priv() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -204,6 +207,19 @@ if [ "$SKIP_CHECK_REQUISITOS" = "true" ]; then
   exit 0
 fi
 
+# LXD todavía no está instalado en un host nuevo: encadena 01_bootstrap_host.sh
+# automáticamente (pide la contraseña de sudo de forma interactiva vía
+# --ask-become-pass) en vez de dejar que check_requisitos.yml falle pidiendo
+# ejecutarlo a mano.
+if ! command -v lxc &>/dev/null; then
+  echo ""
+  echo "════════════════════════════════════════════════════════════════"
+  echo "  LXD no está instalado todavía; ejecutando 01_bootstrap_host.sh..."
+  echo "════════════════════════════════════════════════════════════════"
+  echo ""
+  "$SCRIPT_DIR/01_bootstrap_host.sh"
+fi
+
 echo ""
 echo "════════════════════════════════════════════════════════════════"
 echo "  Lanzando comprobación de requisitos..."
@@ -212,7 +228,7 @@ echo ""
 
 ANSIBLE_PLAYBOOK="$HOME/.local/bin/ansible-playbook"
 if ! command -v ansible-playbook &>/dev/null && [ -x "$ANSIBLE_PLAYBOOK" ]; then
-  "$ANSIBLE_PLAYBOOK" check_requisitos.yml
+  "$ANSIBLE_PLAYBOOK" "$SCRIPT_DIR/check_requisitos.yml"
 else
-  ansible-playbook check_requisitos.yml
+  ansible-playbook "$SCRIPT_DIR/check_requisitos.yml"
 fi
