@@ -1,8 +1,8 @@
 ---
 # Ported from ansible/base/02_k8s_base_ha_3_managers_3_workers/04_instalar_containerd.yml.
-- name: Install prerequisite packages (ca-certificates, curl, gnupg)
+- name: Install prerequisite packages (ca-certificates, curl, gnupg, python3-debian)
   ansible.builtin.apt:
-    name: [ca-certificates, curl, gnupg]
+    name: [ca-certificates, curl, gnupg, python3-debian]
     state: present
     update_cache: true
     lock_timeout: 300
@@ -20,17 +20,18 @@
     mode: "0644"
 
 - name: Add the official Docker repository
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [arch={{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture'] }}
-      signed-by=/etc/apt/keyrings/docker.asc]
-      https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable
-    filename: docker
-    state: present
-    update_cache: true
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: deb
+    uris: https://download.docker.com/linux/ubuntu
+    suites: "{{ ansible_facts['distribution_release'] }}"
+    components: stable
+    architectures: "{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture'] }}"
+    signed_by: /etc/apt/keyrings/docker.asc
 
 - name: Install containerd.io
   ansible.builtin.apt:
     name: containerd.io
     state: present
+    update_cache: true
     lock_timeout: 300

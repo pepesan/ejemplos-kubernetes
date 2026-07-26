@@ -5,6 +5,12 @@
   vars:
     kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
   tasks:
+    - name: Instalar python3-debian (dependencia de deb822_repository)
+      ansible.builtin.apt:
+        name: python3-debian
+        state: present
+        lock_timeout: 300
+
     - name: Descargar la clave GPG del repositorio de la nueva versión de Kubernetes
       ansible.builtin.get_url:
         url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_upgrade_target_version }}/deb/Release.key"
@@ -13,11 +19,12 @@
         force: true
 
     - name: Apuntar el repositorio de Kubernetes a la nueva versión
-      ansible.builtin.apt_repository:
-        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/{{ k8s_upgrade_target_version }}/deb/ /"
-        filename: kubernetes
-        state: present
-        update_cache: true
+      ansible.builtin.deb822_repository:
+        name: kubernetes
+        types: deb
+        uris: "https://pkgs.k8s.io/core:/stable:/{{ k8s_upgrade_target_version }}/deb/"
+        suites: "/"
+        signed_by: /etc/apt/keyrings/kubernetes-apt-keyring.asc
 
     - name: Quitar el "hold" de kubeadm para poder actualizarlo
       ansible.builtin.dpkg_selections:
@@ -28,6 +35,7 @@
       ansible.builtin.apt:
         name: kubeadm
         state: latest
+        update_cache: true
         lock_timeout: 300
 
     - name: Volver a poner "hold" en kubeadm

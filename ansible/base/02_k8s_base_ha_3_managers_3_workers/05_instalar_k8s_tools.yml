@@ -3,6 +3,12 @@
   hosts: k8s_nodes
   gather_facts: true
   tasks:
+    - name: Instalar python3-debian (dependencia de deb822_repository)
+      ansible.builtin.apt:
+        name: python3-debian
+        state: present
+        lock_timeout: 300
+
     - name: Descargar la clave GPG del repositorio de Kubernetes
       ansible.builtin.get_url:
         url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/deb/Release.key"
@@ -10,11 +16,12 @@
         mode: "0644"
 
     - name: Añadir el repositorio oficial de Kubernetes
-      ansible.builtin.apt_repository:
-        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/deb/ /"
-        filename: kubernetes
-        state: present
-        update_cache: true
+      ansible.builtin.deb822_repository:
+        name: kubernetes
+        types: deb
+        uris: "https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/deb/"
+        suites: "/"
+        signed_by: /etc/apt/keyrings/kubernetes-apt-keyring.asc
 
     - name: Instalar kubelet, kubeadm y kubectl
       ansible.builtin.apt:
@@ -23,6 +30,7 @@
           - kubeadm
           - kubectl
         state: present
+        update_cache: true
         lock_timeout: 300
 
     - name: Evitar que se actualicen automáticamente kubelet, kubeadm y kubectl

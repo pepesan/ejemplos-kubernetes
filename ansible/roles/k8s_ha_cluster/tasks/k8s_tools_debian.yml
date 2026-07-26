@@ -1,5 +1,11 @@
 ---
 # Ported from ansible/base/02_k8s_base_ha_3_managers_3_workers/05_instalar_k8s_tools.yml.
+- name: Install python3-debian (deb822_repository dependency)
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+    lock_timeout: 300
+
 - name: Download the Kubernetes repository GPG key
   ansible.builtin.get_url:
     url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/deb/Release.key"
@@ -7,11 +13,12 @@
     mode: "0644"
 
 - name: Add the official Kubernetes repository
-  ansible.builtin.apt_repository:
-    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/deb/ /"
-    filename: kubernetes
-    state: present
-    update_cache: true
+  ansible.builtin.deb822_repository:
+    name: kubernetes
+    types: deb
+    uris: "https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/deb/"
+    suites: "/"
+    signed_by: /etc/apt/keyrings/kubernetes-apt-keyring.asc
 
 - name: Install kubelet, kubeadm and kubectl
   ansible.builtin.apt:
@@ -20,6 +27,7 @@
       - kubeadm
       - kubectl
     state: present
+    update_cache: true
     lock_timeout: 300
 
 - name: Hold kubelet, kubeadm and kubectl at their installed version

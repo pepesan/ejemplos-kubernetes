@@ -1,6 +1,6 @@
 # Scripts
 
-Standalone test/utility scripts that don't belong to any single lab or role — currently just a multi-distro smoke test for `ansible/roles/lxd_host_bootstrap/`.
+Standalone test/utility scripts that don't belong to any single lab or role.
 
 ## `test_lxd_host_bootstrap_distros.sh`
 
@@ -23,3 +23,20 @@ cd ansible/scripts
 ```
 
 No `sudo` required: creating/deleting LXD containers only needs membership in the `lxd` group, and `lxd_host_bootstrap`'s own privileged tasks run *inside* the disposable test containers, not on the host running this script.
+
+## `test_instalar_ansible_distros.sh`
+
+Smoke-tests `ansible/base/00_instalar_ansible.sh` (the pipx-based Ansible installer) against the 2 latest stable releases of Ubuntu, Debian, Rocky Linux, Fedora and openSUSE — same distro scope as `lxd_host_bootstrap`, plus openSUSE. Rocky only has one release tested live (9: no LXD image for 10 yet, same blocker as above). openSUSE tests Leap 16.0 + Tumbleweed instead of two Leap releases, since no 15.x LXD image is published anymore either.
+
+For each distro, launches a plain throwaway container (no VM, no SSH — just `lxc exec`), pushes the installer script in, runs it as root with `SKIP_CHECK_REQUISITOS=true` (there's no real LXD/`lxc` inside the test container, so the installer's final `check_requisitos.yml` step doesn't apply here), and checks `ansible-playbook --version` works afterwards. Always deletes every test container on exit, via `trap ... EXIT`, whether the run succeeded or not.
+
+This test is what proved `00_instalar_ansible.sh` needs `pipx install --include-deps` rather than plain `pipx install`: on Rocky Linux 9 (system Python 3.9), pip resolves an older `ansible` release whose own package only declares `ansible-community` as a console script, delegating `ansible-playbook`/`ansible-galaxy`/etc. to its `ansible-core` dependency — and pipx doesn't expose a dependency's scripts unless asked to. It also confirmed openSUSE needs an explicit `python3` install first (its container images don't ship it) and has no stable `pipx` package name across releases (it's versioned with the system Python, e.g. `python313-pipx`), so the installer falls back to `python3 -m ensurepip --user && python3 -m pip install --user pipx` there.
+
+### Usage
+
+```bash
+cd ansible/scripts
+./test_instalar_ansible_distros.sh
+```
+
+No `sudo` required, for the same reason as the bootstrap smoke test above.

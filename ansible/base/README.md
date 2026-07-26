@@ -10,6 +10,31 @@ Antes de empezar, solo debes asegurar estos tres requisitos básicos en tu máqu
    - Dado que los playbooks están diseñados para usar **Máquinas Virtuales LXD (LXD VMs)** para garantizar el aislamiento absoluto, tu equipo debe soportar virtualización de hardware (KVM habilitado en la BIOS y cargado en el kernel).
 2. **Ansible Instalado:**
    - Debes disponer de Ansible instalado en tu host para lanzar las automatizaciones.
+   - La forma recomendada es vía **pipx**, que aísla Ansible del Python del sistema:
+     ```bash
+     sudo apt install -y pipx   # si no tienes pipx instalado todavía
+     pipx install ansible       # instala el paquete "ansible" completo (no "ansible-core")
+     pipx ensurepath
+     ```
+     > [!IMPORTANT]
+     > Instala el paquete **`ansible`** (no `ansible-core`): solo el paquete completo trae
+     > empaquetadas las colecciones `community.general` y `kubernetes.core`, que
+     > `check_requisitos.yml` y `00_bootstrap_host_lxd.yml` necesitan para poder ejecutarse
+     > la primera vez, antes de tener conexión a Internet para descargarlas por su cuenta.
+     >
+     > Tras `pipx ensurepath` puede que necesites abrir una terminal nueva (o hacer
+     > `source ~/.bashrc`) para que `ansible-playbook` quede disponible en el `PATH`.
+
+     También puedes usar el script [`00_instalar_ansible.sh`](00_instalar_ansible.sh) de este
+     directorio: instala Ansible con pipx (inyectando ya `kubernetes`, `jsonpatch` y `pyyaml`
+     en su venv), instala `kubectl` y `helm` (binarios oficiales) y a continuación lanza
+     `check_requisitos.yml` automáticamente. Es **multidistribución**: probado en vivo en
+     Ubuntu, Debian, Rocky Linux, Fedora y openSUSE (ver
+     [`ansible/scripts/test_instalar_ansible_distros.sh`](../scripts/test_instalar_ansible_distros.sh)).
+     ```bash
+     chmod +x 00_instalar_ansible.sh
+     ./00_instalar_ansible.sh
+     ```
 3. **Claves SSH:**
    - Debes disponer de una clave SSH pública en tu host (por ejemplo, `~/.ssh/id_ed25519.pub`). Se inyectará automáticamente en las VMs para permitir que Ansible se conecte sin contraseña.
    - Si no tienes claves SSH creadas en tu host, puedes generarlas con el comando:
@@ -30,11 +55,28 @@ Para configurar tu máquina física (host) con el entorno de virtualización LXD
 Este playbook realiza las siguientes acciones críticas:
 1.  **Instala utilidades base:** `snapd` y `curl`.
 2.  **Instala dependencias de Python para Ansible:** `python3-kubernetes`, `python3-jsonpatch` y `python3-yaml`. Estas bibliotecas son **imprescindibles** para que Ansible pueda usar sus módulos nativos de gestión de Kubernetes (`kubernetes.core.k8s`) y Helm (`kubernetes.core.helm`) sin depender de comandos de consola manuales.
+
+    > [!WARNING]
+    > Si instalaste Ansible con **pipx**, estos paquetes `apt` se instalan en el Python del
+    > sistema, pero pipx ejecuta Ansible en un venv aislado que **no ve** ese Python del
+    > sistema. El síntoma es un fallo como `Failed to import the required Python library
+    > (kubernetes)` al llegar a una tarea `kubernetes.core.k8s` (por ejemplo, en
+    > `07_desplegar_headlamp.yml`), aunque `check_requisitos.yml` no lo detecte de antemano
+    > porque solo comprueba que la colección `kubernetes.core` esté presente, no que la
+    > librería `kubernetes` sea importable desde el intérprete que usará Ansible.
+    >
+    > Si instalaste Ansible con [`00_instalar_ansible.sh`](00_instalar_ansible.sh) (opción
+    > recomendada más arriba) esto **ya está resuelto**: el script inyecta `kubernetes`,
+    > `jsonpatch` y `pyyaml` directamente en el venv de pipx (`pipx inject`) justo después de
+    > instalar Ansible. Si instalaste Ansible a mano, inyecta la librería tú mismo:
+    > ```bash
+    > pipx inject ansible kubernetes jsonpatch pyyaml
+    > ```
 3.  **Habilita módulos de kernel:** Carga overlay y br_netfilter en el host para permitir la comunicación por puente de los contenedores de Kubernetes.
-4.  **Instala herramientas Snap (modo classic):**
-    *   `lxd` (el hipervisor para las VMs del clúster).
-    *   `kubectl` (CLI local de Kubernetes para control del clúster).
-    *   `helm` (gestor de paquetes para desplegar Longhorn, Headlamp, etc.).
+4.  **Instala LXD a través de Snap** (el hipervisor para las VMs del clúster). `kubectl` y `helm`
+    ya no se instalan aquí: los instala [`00_instalar_ansible.sh`](00_instalar_ansible.sh) a partir
+    de sus binarios oficiales (mismo método en cualquier distro, no solo las que tienen `snapd`) —
+    por eso ese script se ejecuta antes que este playbook.
 5.  **Inicializa LXD de forma no interactiva:** Levanta el pool de almacenamiento y la red puente `lxdbr0` con la subred `10.207.154.1/24`.
 6.  **Configura permisos:** Añade tu usuario al grupo `lxd`.
 
@@ -44,6 +86,12 @@ Ejecuta el playbook indicando la opción `--ask-become-pass` para que Ansible pu
 
 ```bash
 ansible-playbook 00_bootstrap_host_lxd.yml --ask-become-pass
+```
+
+O usa el script equivalente [`01_bootstrap_host.sh`](01_bootstrap_host.sh) de este directorio:
+```bash
+chmod +x 01_bootstrap_host.sh
+./01_bootstrap_host.sh
 ```
 
 > [!IMPORTANT]

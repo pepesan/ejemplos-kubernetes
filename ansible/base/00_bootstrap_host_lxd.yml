@@ -66,21 +66,13 @@
         dest: /etc/modules-load.d/k8s-lxd-host.conf
         mode: '0644'
 
-    - name: 4. Instalar LXD, kubectl y helm a través de Snap
-      # Explicación de paquetes snap:
-      # - lxd: El hipervisor que levantará las máquinas virtuales que actúan de nodos.
-      # - kubectl: La interfaz de línea de comandos de Kubernetes usada en el host físico
-      #   para controlar y validar el clúster a través del archivo kubeconfig descargado.
-      # - helm: El gestor de paquetes de Kubernetes que nos permite desplegar las aplicaciones
-      #   del clúster (Longhorn, Headlamp, etc.) de forma estandarizada.
+    - name: 4. Instalar LXD a través de Snap
+      # kubectl y helm ya no se instalan aquí: 00_instalar_ansible.sh los instala
+      # a partir de sus binarios oficiales (mismo método en cualquier distro, no solo
+      # las que tienen snapd), y ese script se ejecuta antes que este playbook.
       community.general.snap:
-        name: "{{ item.name }}"
+        name: lxd
         state: present
-        classic: "{{ item.classic | default(omit) }}"
-      loop:
-        - { name: "lxd" }
-        - { name: "kubectl", classic: true }
-        - { name: "helm", classic: true }
 
     - name: 5. Comprobar si LXD ya está inicializado
       ansible.builtin.command: lxc network show "{{ lxd_network_name }}"
@@ -151,9 +143,6 @@
           - "  1. LXD instalado e inicializado con la red:"
           - "     {{ lxd_network_name }} ({{ lxd_network_subnet }})"
           - "  2. Imagen base VM Ubuntu 26.04 importada con alias 'k8s-template'"
-          - "  3. Herramientas locales instaladas en el Host:"
-          - "     - kubectl (CLI de Kubernetes)"
-          - "     - helm (Gestor de paquetes de Kubernetes)"
           - "  "
           - "  El usuario '{{ host_user }}' ha sido añadido al grupo 'lxd'."
           - "  IMPORTANTE: Cierra y abre de nuevo tu terminal (o ejecuta 'newgrp lxd')"

@@ -30,7 +30,7 @@
 
     - name: Fallar si no existe el comando lxc
       ansible.builtin.fail:
-        msg: "Falta el comando 'lxc' (LXD) en este host. Por favor, ejecuta bootstrap_host.sh primero."
+        msg: "Falta el comando 'lxc' (LXD) en este host. Por favor, ejecuta 01_bootstrap_host.sh primero."
       when: lxc_check.rc != 0
 
     - name: Listar imágenes LXD locales
@@ -40,7 +40,7 @@
 
     - name: Fallar si la imagen base no existe
       ansible.builtin.fail:
-        msg: "La imagen base de LXD '{{ lxd_image }}' no existe en el host. Por favor, ejecuta bootstrap_host.sh primero."
+        msg: "La imagen base de LXD '{{ lxd_image }}' no existe en el host. Por favor, ejecuta 01_bootstrap_host.sh primero."
       when: lxd_image not in image_list.stdout_lines
 
     - name: Listar redes LXD
@@ -50,7 +50,7 @@
 
     - name: Fallar si no existe la red gestionada
       ansible.builtin.fail:
-        msg: "No existe la red '{{ lxd_network }}' en LXD. Por favor, ejecuta bootstrap_host.sh primero."
+        msg: "No existe la red '{{ lxd_network }}' en LXD. Por favor, ejecuta 01_bootstrap_host.sh primero."
       when: lxd_network not in (network_list.stdout_lines | map('split', ',') | map('first') | list)
 
     - name: Requisitos OK
