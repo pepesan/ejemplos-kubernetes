@@ -7,6 +7,12 @@
     lxd_network: "lxdbr0"
     lxd_image: "k8s-template"
   tasks:
+    - name: Asegurar que existe el directorio ~/.ssh en el host
+      ansible.builtin.file:
+        path: "~/.ssh"
+        state: directory
+        mode: '0700'
+
     - name: Asegurar que existe el par de claves SSH (ed25519) en el host
       ansible.builtin.openssh_keypair:
         path: "~/.ssh/id_ed25519"

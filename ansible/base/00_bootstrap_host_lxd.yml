@@ -10,7 +10,14 @@
     host_user: "{{ lookup('env', 'USER') }}"
 
   tasks:
-    - name: 0. Asegurar que existe el par de claves SSH (ed25519) en el host
+    - name: 0a. Asegurar que existe el directorio ~/.ssh en el host
+      ansible.builtin.file:
+        path: "~/.ssh"
+        state: directory
+        mode: '0700'
+      become: false
+
+    - name: 0b. Asegurar que existe el par de claves SSH (ed25519) en el host
       # Se requiere para permitir que el host se conecte sin contraseña como root
       # a todas las VMs LXD creadas para el clúster.
       ansible.builtin.openssh_keypair:
