@@ -43,6 +43,13 @@ k8s_ha_cluster_longhorn_chart_version: "1.12.0"
 k8s_ha_cluster_longhorn_workload_group: "{{ k8s_ha_cluster_workers_group }}"
 k8s_ha_cluster_longhorn_storage_group: "{{ k8s_ha_cluster_workers_group }}"
 
+# Installs Longhorn's OS-level prerequisites (open-iscsi/nfs-common on
+# Debian, iscsi-initiator-utils/nfs-utils on RHEL-family) before deploying
+# the chart. Set to false if the caller's own base image/provisioning
+# already guarantees these (e.g. a golden image baked with them in), to
+# skip the extra package-manager run.
+k8s_ha_cluster_longhorn_install_prereqs: true
+
 # Rook Ceph. base/04's own group_vars never actually defined these two (a
 # pre-existing bug in that lab, left unfixed there) — resolved here to real,
 # current values via "helm search repo" / "helm show values" instead.

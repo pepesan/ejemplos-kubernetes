@@ -1,0 +1,34 @@
+---
+# Ubuntu's cloud image ships openssh-server preinstalled and enabled;
+# Debian's and Rocky/Fedora's official LXD VM images do not — confirmed
+# live: "ssh.service"/"sshd.service" doesn't even exist on a fresh Debian 12
+# or Rocky 9 VM ("systemctl status" reports "could not be found"). Without
+# this, wait_for_ssh.yml below times out waiting on a port nothing is
+# listening on, on every distro except Ubuntu.
+#
+# Runs via "lxc exec" (the LXD agent, already confirmed responding by
+# wait_for_agent.yml above), not a real SSH/Ansible connection — these
+# instances have no SSH access yet, that's exactly the problem being fixed.
+- name: Check whether an SSH server is already active in every instance
+  ansible.builtin.command: >
+    lxc exec {{ item }} -- sh -c
+    'systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null'
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  register: lxd_ssh_active_check
+  changed_when: false
+  failed_when: false
+
+# "inactive" contains the substring "active", so checking for exact
+# equality (not "in") matters here — a naive substring check would treat a
+# freshly-imaged instance with no SSH server at all as already active and
+# skip installing one.
+- name: Install and start an SSH server in instances that don't have one active yet
+  ansible.builtin.command: >
+    lxc exec {{ item.item }} -- sh -c
+    '(apt-get update && apt-get install -y openssh-server && systemctl enable --now ssh) ||
+     (dnf install -y openssh-server && systemctl enable --now sshd)'
+  loop: "{{ lxd_ssh_active_check.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: (item.stdout | trim) != 'active'
+  changed_when: true

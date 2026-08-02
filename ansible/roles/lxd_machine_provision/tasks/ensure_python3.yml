@@ -1,0 +1,29 @@
+---
+# Any later play that connects to these instances over real SSH (not "lxc
+# exec") needs a Python interpreter on the target to run Ansible modules —
+# confirmed live: Fedora 43's official LXD *VM* image (unlike its container
+# image, and unlike Rocky/Debian/Ubuntu's VM images) ships with no python3
+# at all, failing the very first "Gathering Facts" task of any subsequent
+# play with "The module interpreter '/usr/bin/python3' was not found."
+#
+# Runs via "lxc exec" (the LXD agent), same reasoning as
+# ensure_ssh_server.yml: these instances have no working SSH/Python
+# environment yet, that's exactly the problem being fixed.
+- name: Check whether python3 is already present in every instance
+  ansible.builtin.command: "lxc exec {{ item }} -- sh -c 'command -v python3'"
+  loop: "{{ groups[lxd_machine_provision_group] }}"
+  register: lxd_python3_check
+  changed_when: false
+  failed_when: false
+
+- name: Install python3 in instances that don't have it yet
+  ansible.builtin.command: >
+    lxc exec {{ item.item }} -- sh -c
+    '(apt-get update && apt-get install -y python3) ||
+     dnf install -y python3 ||
+     zypper --non-interactive install python3'
+  loop: "{{ lxd_python3_check.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.rc != 0
+  changed_when: true

@@ -13,9 +13,19 @@
     state: directory
     mode: "0755"
 
+# Docker publishes a separate apt tree per distro (linux/ubuntu vs
+# linux/debian), not one shared "linux/ubuntu" tree — confirmed live:
+# hardcoding "ubuntu" here made this task, despite being named
+# "containerd_debian.yml" and shared by both os_family members, fail on
+# genuine Debian with "the repository ... does not have a Release file"
+# (only worked "by accident" on Debian 12/"bookworm", since that codename
+# happens to also be a real Ubuntu release name, but Docker's Ubuntu repo
+# has no such component). ansible_facts['distribution'] is "Ubuntu" or
+# "Debian" for this os_family, matching Docker's own URL path exactly once
+# lowercased.
 - name: Download the Docker GPG key
   ansible.builtin.get_url:
-    url: https://download.docker.com/linux/ubuntu/gpg
+    url: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}/gpg"
     dest: /etc/apt/keyrings/docker.asc
     mode: "0644"
 
@@ -23,7 +33,7 @@
   ansible.builtin.deb822_repository:
     name: docker
     types: deb
-    uris: https://download.docker.com/linux/ubuntu
+    uris: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}"
     suites: "{{ ansible_facts['distribution_release'] }}"
     components: stable
     architectures: "{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture'] }}"

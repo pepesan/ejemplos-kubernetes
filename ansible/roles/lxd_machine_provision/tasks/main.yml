@@ -7,6 +7,14 @@
   ansible.builtin.import_tasks: wait_for_agent.yml
   tags: [lxd_machine_provision, wait_for_agent]
 
+- name: Ensure an SSH server is installed and running in every instance
+  ansible.builtin.import_tasks: ensure_ssh_server.yml
+  tags: [lxd_machine_provision, ensure_ssh_server]
+
+- name: Ensure python3 is installed in every instance
+  ansible.builtin.import_tasks: ensure_python3.yml
+  tags: [lxd_machine_provision, ensure_python3]
+
 - name: Inject the host's SSH public key into every instance
   ansible.builtin.import_tasks: inject_ssh_key.yml
   tags: [lxd_machine_provision, inject_ssh_key]

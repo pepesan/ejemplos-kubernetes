@@ -1,4 +1,39 @@
 ---
+# Ported from ansible/base/03_k8s_ha_almacenamiento_persistente_longhorn/03_configurar_os.yml.
+# Missing entirely until now (confirmed live: zero matches for "iscsi" or
+# "nfs-common"/"nfs-utils" anywhere in ansible/roles/ before this) — without
+# it, the longhorn-manager DaemonSet can start but volume attachment fails
+# since nothing provides the iscsi kernel target/initiator tooling it needs.
+# Dispatched by os_family (unlike the base lab this was ported from, which
+# only ever targets Ubuntu guest nodes, this role's own nodes can genuinely
+# be Rocky/Fedora too — same os_family pattern as containerd.yml/k8s_tools.yml).
+# Skippable via k8s_ha_cluster_longhorn_install_prereqs (default true), for
+# callers whose own base image/provisioning already guarantees these.
+- name: Install Longhorn's OS-level prerequisites on every node
+  when:
+    - inventory_hostname in groups[k8s_ha_cluster_nodes_group]
+    - k8s_ha_cluster_longhorn_install_prereqs | bool
+  block:
+    - name: Install Longhorn prerequisites (Debian family)
+      ansible.builtin.apt:
+        name: [open-iscsi, nfs-common]
+        state: present
+        update_cache: true
+        lock_timeout: 300
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Install Longhorn prerequisites (RedHat family)
+      ansible.builtin.dnf:
+        name: [iscsi-initiator-utils, nfs-utils]
+        state: present
+      when: ansible_facts.os_family == 'RedHat'
+
+    - name: Ensure the iscsid service is started and enabled
+      ansible.builtin.systemd:
+        name: iscsid
+        state: started
+        enabled: true
+
 # Ported from ansible/base/03_k8s_ha_almacenamiento_persistente_longhorn/10_desplegar_longhorn.yml.
 # The workload/storage node-pool split is optional here: both groups default
 # to the general workers group (see defaults/main.yml), so a caller that

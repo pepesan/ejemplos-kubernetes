@@ -85,6 +85,11 @@ genuinely distinct — found live: with a single, undivided workers group, taint
 schedule (they don't tolerate that taint, only `longhorn-manager`'s DaemonSet does), so they'd sit
 Pending forever.
 
+Longhorn's OS-level prerequisites (`open-iscsi`/`nfs-common` on Debian, `iscsi-initiator-utils`/
+`nfs-utils` on RHEL-family, plus enabling `iscsid`) are installed automatically on every node before the
+chart is deployed. Set `k8s_ha_cluster_longhorn_install_prereqs: false` to skip this — e.g. if the
+caller's own base image already guarantees them.
+
 **Note on `rook_ceph` defaults**: `base/04`'s own `group_vars/all.yml` references
 `rook_ceph_chart_version`/`ceph_image` in its task file but never actually defines them — a pre-existing
 bug in that base lab. This role's own defaults (`k8s_ha_cluster_rook_ceph_chart_version: "v1.20.2"`,

@@ -3,9 +3,14 @@
 
 - name: Instalar requisitos adicionales de Longhorn (iscsid/nfs) en todos los nodos
   hosts: k8s_nodes
-  gather_facts: false
+  gather_facts: true
   tasks:
-    - name: Instalar dependencias de almacenamiento de Longhorn (open-iscsi, nfs-common)
+    # Los nodos guest de estos laboratorios son siempre Ubuntu (imagen
+    # k8s-template), así que en la práctica esto solo ejecuta la rama
+    # Debian — pero se generaliza por os_family igual que el rol
+    # k8s_ha_cluster (extraído de este mismo lab), por si en el futuro se
+    # amplía el soporte de distro de los nodos guest.
+    - name: Instalar dependencias de almacenamiento de Longhorn (Debian/Ubuntu)
       ansible.builtin.apt:
         name:
           - open-iscsi
@@ -13,6 +18,15 @@
         state: present
         update_cache: true
         lock_timeout: 300
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Instalar dependencias de almacenamiento de Longhorn (Rocky/Fedora)
+      ansible.builtin.dnf:
+        name:
+          - iscsi-initiator-utils
+          - nfs-utils
+        state: present
+      when: ansible_facts.os_family == 'RedHat'
 
     - name: Asegurar que el servicio iscsid está iniciado y habilitado en el arranque
       ansible.builtin.systemd:
