@@ -66,6 +66,7 @@ trap cleanup EXIT
 echo "════════════════════════════════════════════════════════════════"
 echo "  [1/5] Installing build dependencies (apt, needs sudo)"
 echo "════════════════════════════════════════════════════════════════"
+sudo apt-get update
 sudo apt-get install -y dnf btrfs-progs golang-go make git pkg-config libacl1-dev
 
 echo ""
