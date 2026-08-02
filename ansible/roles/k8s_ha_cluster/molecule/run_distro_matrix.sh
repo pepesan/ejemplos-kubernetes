@@ -46,7 +46,7 @@ already_done() {
 echo "════════════════════════════════════════════════════════════════"
 echo "  Importing VM-format test images (skips any already present)"
 echo "════════════════════════════════════════════════════════════════"
-ANSIBLE_ROLES_PATH="$SCRIPT_DIR/.." ansible-playbook -i "localhost," single_manager/prepare_images.yml
+ANSIBLE_ROLES_PATH="$SCRIPT_DIR/.." ansible-playbook -i "localhost," molecule/single_manager/prepare_images.yml
 
 for entry in "${DISTROS[@]}"; do
   distro="${entry%%:*}"
