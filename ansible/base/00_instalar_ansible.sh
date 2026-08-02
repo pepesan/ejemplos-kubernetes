@@ -6,10 +6,13 @@ set -euo pipefail
 # previos (check_requisitos.yml) — encadenando 01_bootstrap_host.sh automáticamente
 # antes si LXD todavía no está instalado.
 #
-# Multidistribución: probado en vivo (contenedores LXD) sobre las 2 últimas versiones
-# estables de Ubuntu, Debian, Rocky Linux (solo 9: no hay imagen de LXD para la 10
-# todavía), Fedora y openSUSE (Leap 16.0 y Tumbleweed, ya que no hay imagen de LXD para
-# ninguna 15.x). Ver ansible/scripts/test_instalar_ansible_distros.sh.
+# Multidistribución: probado en vivo (contenedores LXD, salvo Rocky Linux 10 que
+# se prueba como VM LXD por no haber imagen de contenedor publicada todavía) sobre
+# las 2 últimas versiones estables de Ubuntu, Debian, Rocky Linux (9 y 10; la 10
+# usa la imagen local rockylinux/10/vm construida por
+# ansible/scripts/build_rocky10_lxd_image.sh), Fedora y openSUSE (Leap 16.0 y
+# Tumbleweed, ya que no hay imagen de LXD para ninguna 15.x). Ver
+# ansible/scripts/test_instalar_ansible_distros.sh.
 #
 # SKIP_CHECK_REQUISITOS=true evita el paso final (usado por ese test multidistro, donde
 # no hay LXD real dentro del contenedor de prueba).

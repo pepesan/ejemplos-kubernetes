@@ -5,6 +5,7 @@ Este archivo detalla la secuencia de laboratorios prácticos diseñados para ser
 ---
 
 ## Cosas a comprobar
+ - **[PRIORITARIO]** Revisar la instalación de Longhorn (`03_k8s_ha_almacenamiento_persistente_longhorn/03_configurar_os.yml`): usa `ansible.builtin.apt` a pelo para instalar `open-iscsi`/`nfs-common` — solo funciona en Ubuntu/Debian. Generalizar igual que se acaba de hacer en `00_bootstrap_host_lxd.yml` (despachar por `ansible_facts.os_family`/`ansible.builtin.package`, con los nombres de paquete equivalentes en Rocky/Fedora — `iscsi-initiator-utils`/`nfs-utils` — y openSUSE — `open-iscsi`/`nfs-client`, a verificar en vivo, no asumir). Revisar también si el mismo patrón de `apt` hardcodeado aparece en otros labs que dependan de Longhorn (04, 05 y posteriores que lo reutilizan vía `import_playbook`).
  - Que se usan siempre los modulos más idempotentes: sobre todo los de k8s y helm
  - en los ejemplos 02 03 04 y 05 hay que meter playbook que permitan añadir un nuevo nodo al cluster y otro para quitarlo de manera segura. en el caso de el 03 04 y 05 deben de ser a parte un nodo de almancenamiento. tambien deberemos meter la manera de quitar un nodo de almacenamiento.
  - Se ha subido `kube_vip_image` de `v0.8.9` a `v1.2.1` (salto de versión mayor) en los escenarios 02-08 (todos los que usan kube-vip). Solo se ha vuelto a probar el arranque HA con la nueva versión en el escenario 08 (en curso). Pendiente revisar/volver a probar el arranque de kube-vip v1.2.1 en los escenarios 02, 03, 04, 05, 06 y 07.

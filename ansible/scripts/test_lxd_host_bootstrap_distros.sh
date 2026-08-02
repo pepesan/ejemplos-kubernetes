@@ -45,8 +45,10 @@ echo ""
 echo "════════════════════════════════════════════════════════════════"
 echo "  [3/3] Running lxd_host_bootstrap against each distro"
 echo "════════════════════════════════════════════════════════════════"
+# --forks 10: the inventory has 9 hosts (one per distro); Ansible's default
+# of 5 would run this in two batches instead of all of them at once.
 ansible-playbook -i inventory_distro_test.ini 02_bootstrap.yml \
-  --skip-tags requires_virtualization,requires_ansible_control_node "$@"
+  --forks 10 --skip-tags requires_virtualization,requires_ansible_control_node "$@"
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"

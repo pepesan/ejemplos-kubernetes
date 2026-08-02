@@ -10,9 +10,14 @@
   gather_facts: false
   tasks:
     - name: Create each container
+      # Every host defaults to a plain container. lxd_type is available as a
+      # per-host inventory override (e.g. "virtual-machine") for any future
+      # distro whose only available image is VM-format — rocky10 no longer
+      # needs it now that build_rocky10_lxd_image.sh can produce a container
+      # image too ("rockylinux/10", see 00_prepare_images.yml).
       community.general.lxd_container:
         name: "{{ item }}"
-        type: container
+        type: "{{ hostvars[item].lxd_type | default('container') }}"
         state: started
         source:
           type: image
@@ -34,11 +39,12 @@
     # raw shell commands (including fact gathering). Ubuntu's cloud images
     # ship python3 already; Debian's minimal container images don't
     # (confirmed live: "gather_facts" failed with "python3: not found").
-    # Rocky/Fedora ship python3 out of the box, but the check is kept
-    # generic (try apt, fall back to dnf) rather than branching per distro.
+    # Rocky/Fedora/openSUSE ship python3 out of the box, but the check is
+    # kept generic (try apt, fall back to dnf, then zypper) rather than
+    # branching per distro.
     - name: Ensure python3 is present in each container (Debian's minimal images lack it)
       ansible.builtin.command: >
         lxc exec {{ item }} -- sh -c
-        'command -v python3 || (apt-get update && apt-get install -y python3) || dnf install -y python3'
+        'command -v python3 || (apt-get update && apt-get install -y python3) || dnf install -y python3 || zypper --non-interactive install python3'
       loop: "{{ groups['distro_test_nodes'] }}"
       changed_when: true

@@ -30,6 +30,18 @@
 # harness in ansible/scripts/, which does exactly that). Tagged so such a
 # test can skip it explicitly instead of failing on an assumption the role
 # was never meant to make in its normal (local) usage.
+#
+# The explicit PATH is required whenever this play is itself invoked as
+# root (e.g. "sudo ansible-playbook ..." — exactly the scenario
+# lxd_host_user's own SUDO_USER fallback in defaults/main.yml anticipates,
+# and how this role's own "sudo -E molecule test" runs it): de-escalating
+# from root to lxd_host_user via become_user is a REAL privilege change in
+# that case (not a no-op, unlike when already connected as that same
+# user), and sudo resets PATH to its secure_path, dropping ~/.local/bin —
+# exactly where pipx installs ansible-galaxy (see
+# ansible/base/00_instalar_ansible.sh). Confirmed live: this task failed
+# with "Failed to find required executable 'ansible-galaxy'" under
+# "sudo -E molecule test" without it.
 - name: Ensure required Ansible Galaxy collections are installed and up to date
   community.general.ansible_galaxy_install:
     name: "{{ item }}"
@@ -38,4 +50,6 @@
   loop: "{{ lxd_galaxy_collections }}"
   become: true
   become_user: "{{ lxd_host_user }}"
+  environment:
+    PATH: "/home/{{ lxd_host_user }}/.local/bin:{{ ansible_facts.env.PATH }}"
   tags: [requires_ansible_control_node]

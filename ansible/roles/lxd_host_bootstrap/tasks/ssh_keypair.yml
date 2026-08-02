@@ -1,4 +1,16 @@
 ---
+# openSUSE's base images ship with neither "ssh-keygen" nor a "cryptography"
+# Python library new enough for openssh_keypair's fallback — confirmed live:
+# the task below fails with "Cannot find either the OpenSSH binary in the
+# PATH or cryptography >= 3.3 installed on this system" without this.
+# Every other supported distro's base image already carries ssh-keygen, so
+# this only actually installs anything on Suse.
+- name: Ensure ssh-keygen is available (openSUSE's base image lacks it)
+  ansible.builtin.package:
+    name: openssh-clients
+    state: present
+  when: ansible_facts.os_family == 'Suse'
+
 # Required so the host can connect passwordless as root to every LXD
 # instance created later (the public half gets pushed into each instance by
 # lxd_machine_provision).

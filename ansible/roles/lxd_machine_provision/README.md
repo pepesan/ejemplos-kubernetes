@@ -16,10 +16,11 @@ generated).
 
 ## Requirements
 
-- Ubuntu 24.04/26.04 or Debian 12 (bookworm)/13 (trixie) as the LXD host.
+- Any LXD host already bootstrapped by `lxd_host_bootstrap` (Ubuntu 24.04/26.04,
+  Debian 12/13, Rocky Linux 9/10, Fedora 43/44, or openSUSE Leap 16.0/Tumbleweed).
   This role itself has no distro-specific logic — it only calls `lxc` and
-  generic Ansible modules — so it works identically on both; the platform
-  constraint comes entirely from `lxd_host_bootstrap`.
+  generic Ansible modules — so it works identically on all of them; the
+  platform constraint comes entirely from `lxd_host_bootstrap`.
 
 ## Instance type: VM or container
 
@@ -46,15 +47,23 @@ override `lxd_image` (globally or per host, same override pattern as
 `images:rockylinux/9` remote image. Rocky Linux 10 has no published LXD/Incus image yet (re-confirmed
 2026-08-02: `lxc image list images:rockylinux/10` returns nothing, only Rocky 8/9 are published), so
 using it here means building one locally first and importing it with `lxc image import ... --alias
-rockylinux/10/vm` so `lxd_image`/`lxd_instance_type` can point at it exactly like any other alias.
+<alias>` so `lxd_image`/`lxd_instance_type` can point at it exactly like any other alias.
 
-**Status: resolved.** `ansible/scripts/build_rocky10_lxd_image.sh` builds and imports the image
-end-to-end; verified live 2026-08-02 (booted the result, confirmed `lxc exec`/`systemctl
-is-system-running` → `running`). It was first attempted 2026-07-18 and blocked on a genuine upstream
-`distrobuilder` bug at the time — see git history of this file for that session's diagnostics (wrong
-build subcommand, `btrfs-progs` dependency, a truncated-download red herring, and the GPG bootstrap
-failure). Three real problems had to be worked around to get from there to a working image, all
-confirmed live rather than assumed:
+**Status: resolved, both image types.** `ansible/scripts/build_rocky10_lxd_image.sh [arch] [vm|container]`
+builds and imports the image end-to-end; verified live 2026-08-02 for both:
+
+- `./build_rocky10_lxd_image.sh x86_64 vm` → imports `rockylinux/10/vm`. Booted, confirmed
+  `lxc exec`/`systemctl is-system-running` → `running`.
+- `./build_rocky10_lxd_image.sh x86_64 container` → imports `rockylinux/10`. Needs none of the three
+  VM-specific workarounds below (no agent to start, since a container shares the host kernel
+  directly) — booted, confirmed `systemctl is-system-running` → `running` and `dnf` resolves
+  repos/DNS fine. Set `lxd_instance_type: container` alongside `lxd_image: rockylinux/10` to use it
+  with this role.
+
+It was first attempted 2026-07-18 and blocked on a genuine upstream `distrobuilder` bug at the time —
+see git history of this file for that session's diagnostics (wrong build subcommand, `btrfs-progs`
+dependency, a truncated-download red herring, and the GPG bootstrap failure). Three real problems had
+to be worked around to get from there to a working VM image, all confirmed live rather than assumed:
 
 1. **The `distrobuilder` snap is stale on both channels.** `latest/edge` is pinned to a build from
    2025-06-18, which predates the upstream commit that actually added Rocky 10 support

@@ -17,6 +17,10 @@
 # Confirmed live: even the classic-mount symlink step failed on every
 # distro's test container with "/snap is not empty, refusing to convert
 # it" (LXD appears to inject a /snap entry into containers on its own).
+# openSUSE's native-package branch inside snap_packages.yml doesn't share
+# this specific problem, but is still tagged the same way for simplicity —
+# it also starts the real lxd daemon, which the test harness's plain
+# containers aren't meant to exercise either.
 - name: Install LXD, kubectl and helm via snap
   ansible.builtin.import_tasks: snap_packages.yml
   tags: [lxd_host_bootstrap, snap_packages, requires_virtualization]

@@ -55,9 +55,15 @@ Antes de empezar, solo debes asegurar estos tres requisitos básicos en tu máqu
 
 Para configurar tu máquina física (host) con el entorno de virtualización LXD y todas las dependencias requeridas para interactuar con los clústeres de Kubernetes, debes ejecutar el playbook principal de aprovisionamiento del host.
 
+Es **multidistribución** (mismo alcance que [`00_instalar_ansible.sh`](00_instalar_ansible.sh): Ubuntu,
+Debian, Rocky Linux 9/10, Fedora y openSUSE Leap/Tumbleweed), verificado en vivo — ver
+[`ansible/scripts/test_lxd_host_bootstrap_distros.sh`](../scripts/test_lxd_host_bootstrap_distros.sh)
+(la misma lógica, extraída como rol reutilizable en
+[`lxd_host_bootstrap`](../roles/lxd_host_bootstrap/)).
+
 Este playbook realiza las siguientes acciones críticas:
-1.  **Instala utilidades base:** `snapd` y `curl`.
-2.  **Instala dependencias de Python para Ansible:** `python3-kubernetes`, `python3-jsonpatch` y `python3-yaml`. Estas bibliotecas son **imprescindibles** para que Ansible pueda usar sus módulos nativos de gestión de Kubernetes (`kubernetes.core.k8s`) y Helm (`kubernetes.core.helm`) sin depender de comandos de consola manuales.
+1.  **Instala utilidades base:** `snapd` (excepto en openSUSE, que no lo publica — ver más abajo) y `curl`.
+2.  **Instala dependencias de Python para Ansible:** `python3-kubernetes`, `python3-jsonpatch` y `python3-yaml` (`python3-pyyaml` en Rocky/Fedora; `python3dist(kubernetes)`/`python3dist(jsonpatch)`/`python3dist(pyyaml)` en openSUSE, cuyos nombres de paquete van versionados con el Python del sistema). Estas bibliotecas son **imprescindibles** para que Ansible pueda usar sus módulos nativos de gestión de Kubernetes (`kubernetes.core.k8s`) y Helm (`kubernetes.core.helm`) sin depender de comandos de consola manuales.
 
     > [!WARNING]
     > Si instalaste Ansible con **pipx**, estos paquetes `apt` se instalan en el Python del
@@ -76,10 +82,12 @@ Este playbook realiza las siguientes acciones críticas:
     > pipx inject ansible kubernetes jsonpatch pyyaml
     > ```
 3.  **Habilita módulos de kernel:** Carga overlay y br_netfilter en el host para permitir la comunicación por puente de los contenedores de Kubernetes.
-4.  **Instala LXD a través de Snap** (el hipervisor para las VMs del clúster). `kubectl` y `helm`
-    ya no se instalan aquí: los instala [`00_instalar_ansible.sh`](00_instalar_ansible.sh) a partir
-    de sus binarios oficiales (mismo método en cualquier distro, no solo las que tienen `snapd`) —
-    por eso ese script se ejecuta antes que este playbook.
+4.  **Instala LXD** (el hipervisor para las VMs del clúster) — vía Snap en Ubuntu/Debian/Rocky/Fedora, o
+    vía su paquete nativo de zypper en openSUSE (que no publica `snapd`; ahí también se activa y arranca
+    explícitamente `lxd.service`, que viene deshabilitado por defecto a diferencia del snap). `kubectl` y
+    `helm` ya no se instalan aquí: los instala [`00_instalar_ansible.sh`](00_instalar_ansible.sh) a partir
+    de sus binarios oficiales (mismo método en cualquier distro) — por eso ese script se ejecuta antes que
+    este playbook.
 5.  **Inicializa LXD de forma no interactiva:** Levanta el pool de almacenamiento y la red puente `lxdbr0` con la subred `10.207.154.1/24`.
 6.  **Configura permisos:** Añade tu usuario al grupo `lxd`.
 

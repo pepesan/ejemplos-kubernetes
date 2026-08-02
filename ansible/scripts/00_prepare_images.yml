@@ -5,6 +5,15 @@
 # exercises the OS-package-level tasks of lxd_host_bootstrap (apt, snap,
 # kernel modules), not lxd_init/base_image, which need real virtualization
 # and are skipped via --skip-tags requires_virtualization.
+#
+# Rocky Linux 10 is the one exception: no *published* LXD image exists for
+# it yet, container or VM, so it isn't in distro_test_images below —
+# 01_provision.yml launches it instead from the local "rockylinux/10"
+# container image built by ansible/scripts/build_rocky10_lxd_image.sh
+# (`./build_rocky10_lxd_image.sh x86_64 container`). This just checks that
+# image is already present, failing with a clear pointer to that script
+# rather than the confusing error a missing image would otherwise produce
+# down the line.
 - name: Import container-format test images for every supported distro
   hosts: localhost
   connection: local
@@ -25,6 +34,10 @@
         remote_image: "images:fedora/43"
       - alias: test-fedora-44
         remote_image: "images:fedora/44"
+      - alias: test-opensuse-16
+        remote_image: "images:opensuse/16.0"
+      - alias: test-opensuse-tumbleweed
+        remote_image: "images:opensuse/tumbleweed"
   tasks:
     - name: List local LXD images
       ansible.builtin.command: lxc image list -f csv -c l
@@ -39,3 +52,11 @@
         label: "{{ item.alias }}"
       when: item.alias not in lxd_local_images.stdout_lines
       changed_when: true
+
+    - name: Ensure the local Rocky Linux 10 container image is present
+      ansible.builtin.assert:
+        that: "'rockylinux/10' in lxd_local_images.stdout_lines"
+        fail_msg: >-
+          Local image "rockylinux/10" not found. Build and import it first:
+          ansible/scripts/build_rocky10_lxd_image.sh x86_64 container
+        success_msg: "rockylinux/10 already present."

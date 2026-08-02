@@ -1,19 +1,40 @@
 ---
-# Ubuntu's snapd package sets up the classic "/snap" symlink automatically;
-# Debian's does not (documented Debian wiki gotcha) — without it, classic
-# confinement snaps (kubectl, helm below) fail to resolve their paths.
-# Harmless no-op on Ubuntu, where the symlink already exists. "force: true"
-# is required: /var/lib/snapd/snap doesn't exist yet immediately after
-# installing the snapd package (only snapd itself creates it, on first
-# run), and ansible.builtin.file's "link" state refuses to create a
-# symlink to a target that doesn't exist yet unless forced — confirmed
-# live, this failed on every distro without it, not just Debian.
+# Ubuntu's snapd package sets up "/snap" automatically (as a real, populated
+# directory that snapd itself manages — NOT a symlink, confirmed live
+# against this repo's own real Ubuntu host); Debian's does not (documented
+# Debian wiki gotcha) — without it, classic confinement snaps (kubectl,
+# helm below) fail to resolve their paths. "force: true" is required for
+# the fresh-container case this was written for: /var/lib/snapd/snap
+# doesn't exist yet immediately after installing the snapd package (only
+# snapd itself creates it, on first run), and ansible.builtin.file's "link"
+# state refuses to create a symlink to a target that doesn't exist yet
+# unless forced.
+#
+# Only attempted when "/snap" doesn't exist at all yet: confirmed live
+# against this repo's own real (long-lived, snaps-already-installed) Ubuntu
+# host that forcing this unconditionally is actively dangerous there —
+# "/snap" already exists as a real, non-empty directory (snapd's own mount
+# point), and ansible.builtin.file's own safety check refuses to convert a
+# non-empty directory into a symlink ("the directory /snap is not empty,
+# refusing to convert it"), which is exactly what saved this host from
+# having its entire snap mount namespace replaced by a broken symlink. The
+# original "harmless no-op on Ubuntu" assumption behind the unconditional
+# form only held in this role's own throwaway test containers, where
+# "/snap" starts out empty or missing — never verified against a real,
+# already-provisioned host until now.
+- name: Check whether /snap already exists
+  ansible.builtin.stat:
+    path: /snap
+  register: lxd_snap_dir_stat
+  when: ansible_facts.os_family != 'Suse'
+
 - name: Ensure the classic snap mount point exists (required on Debian, already present on Ubuntu)
   ansible.builtin.file:
     src: /var/lib/snapd/snap
     dest: /snap
     state: link
     force: true
+  when: ansible_facts.os_family != 'Suse' and not lxd_snap_dir_stat.stat.exists
 
 - name: Install LXD, kubectl and helm via snap
   community.general.snap:
@@ -21,3 +42,48 @@
     state: present
     classic: "{{ item.classic | default(omit) }}"
   loop: "{{ lxd_snap_packages }}"
+  when: ansible_facts.os_family != 'Suse'
+
+# openSUSE has no snapd package at all (see vars/Suse.yml), so LXD and helm
+# come from their own native zypper packages instead — both confirmed live
+# to exist and work (LXD 5.21.1, genuine upstream, just packaged for SUSE).
+# kubectl has no such native package, so it's installed the same way
+# ansible/base/00_instalar_ansible.sh already does on every distro: download
+# the official binary and verify it against its published sha256 checksum.
+- name: Install LXD and helm via native zypper packages (openSUSE has no snapd)
+  ansible.builtin.package:
+    name:
+      - lxd
+      - helm
+    state: present
+  when: ansible_facts.os_family == 'Suse'
+
+# Unlike the snap-packaged LXD used elsewhere (activated automatically via
+# its socket unit), openSUSE's native lxd.service ships disabled — confirmed
+# live: "lxc list" fails with "LXD unix socket ... not found" until this
+# runs. Needed before lxd_init.yml's "lxd init --preseed" will work.
+- name: Ensure the lxd systemd service is enabled and started (openSUSE only)
+  ansible.builtin.systemd:
+    name: lxd
+    enabled: true
+    state: started
+  when: ansible_facts.os_family == 'Suse'
+
+- name: Query the latest stable kubectl version (openSUSE only — no native package)
+  ansible.builtin.uri:
+    url: https://dl.k8s.io/release/stable.txt
+    return_content: true
+  register: lxd_kubectl_stable_version
+  when: ansible_facts.os_family == 'Suse'
+
+- name: Download and install kubectl (openSUSE only — no native package)
+  ansible.builtin.get_url:
+    url: >-
+      https://dl.k8s.io/release/{{ lxd_kubectl_stable_version.content | trim }}/bin/linux/
+      {{- 'amd64' if ansible_facts.architecture == 'x86_64' else 'arm64' }}/kubectl
+    checksum: >-
+      sha256:https://dl.k8s.io/release/{{ lxd_kubectl_stable_version.content | trim }}/bin/linux/
+      {{- 'amd64' if ansible_facts.architecture == 'x86_64' else 'arm64' }}/kubectl.sha256
+    dest: /usr/local/bin/kubectl
+    mode: "0755"
+  when: ansible_facts.os_family == 'Suse'

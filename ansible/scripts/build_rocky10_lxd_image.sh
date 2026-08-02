@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
-# Builds a Rocky Linux 10 LXD virtual-machine image locally and imports it as
-# rockylinux/10/vm, since no published image exists yet on the public remote
-# (see ansible/roles/lxd_machine_provision/README.md, "Building images not
-# yet published") — confirmed empty again while writing this script:
-# `lxc image list images:rockylinux/10` returns nothing, only Rocky 8/9 are
-# published.
+# Builds a Rocky Linux 10 LXD image locally and imports it, since no
+# published image exists yet on the public remote (see
+# ansible/roles/lxd_machine_provision/README.md, "Building images not yet
+# published") — confirmed empty again while writing this script: `lxc image
+# list images:rockylinux/10` returns nothing, only Rocky 8/9 are published.
 #
-# Three real problems had to be worked around, all confirmed live (booting
-# an actual VM and reading its console/journal) rather than assumed:
+# Usage: build_rocky10_lxd_image.sh [arch] [vm|container]
+#   arch: x86_64 (default) or aarch64
+#   type: "vm" (default, imported as rockylinux/10/vm) or "container"
+#         (imported as rockylinux/10). The three workarounds below are all
+#         VM-specific (the incus-agent that only a VM needs to boot) — a
+#         container build needs none of them, since it shares the host
+#         kernel directly and has no agent to start. They're left in the
+#         patched YAML unconditionally anyway (harmless: the patch is
+#         itself tagged "types: [vm]", so distrobuilder just ignores it
+#         when building a container).
+#
+# Three real problems had to be worked around for the VM variant, all
+# confirmed live (booting an actual VM and reading its console/journal)
+# rather than assumed:
 #
 #   1. The distrobuilder snap (both latest/stable and latest/edge channels)
 #      is stale — the edge channel is pinned to a build from 2025-06-18,
@@ -50,8 +61,16 @@
 set -euo pipefail
 
 ARCH="${1:-x86_64}"
+IMAGE_TYPE="${2:-vm}"
 RELEASE="10"
-IMAGE_ALIAS="rockylinux/${RELEASE}/vm"
+case "${IMAGE_TYPE}" in
+  vm) IMAGE_ALIAS="rockylinux/${RELEASE}/vm" ;;
+  container) IMAGE_ALIAS="rockylinux/${RELEASE}" ;;
+  *)
+    echo "Unknown type '${IMAGE_TYPE}' (expected 'vm' or 'container')" >&2
+    exit 1
+    ;;
+esac
 WORK_DIR="$(mktemp -d /tmp/rocky10-build.XXXXXX)"
 DISTROBUILDER_SRC="${WORK_DIR}/distrobuilder"
 YAML_FILE="${WORK_DIR}/rockylinux.yaml"
@@ -182,13 +201,17 @@ PYEOF
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
-echo "  [4/5] Building the VM image (needs sudo: mounts/chroots the rootfs)"
+echo "  [4/5] Building the ${IMAGE_TYPE} image (needs sudo: mounts/chroots the rootfs)"
 echo "════════════════════════════════════════════════════════════════"
 mkdir -p "${OUTPUT_DIR}"
+BUILD_TYPE_FLAG=()
+if [ "${IMAGE_TYPE}" = "vm" ]; then
+  BUILD_TYPE_FLAG=(--vm)
+fi
 sudo "${DISTROBUILDER_SRC}/distrobuilder-bin" build-incus "${YAML_FILE}" "${OUTPUT_DIR}" \
   -o "image.release=${RELEASE}" \
   -o "image.architecture=${ARCH}" \
-  --vm --type=unified
+  "${BUILD_TYPE_FLAG[@]}" --type=unified
 
 IMAGE_TARBALL="$(find "${OUTPUT_DIR}" -maxdepth 1 -name '*.tar.xz' -print -quit)"
 if [ -z "${IMAGE_TARBALL}" ]; then
@@ -206,4 +229,8 @@ fi
 lxc image import "${IMAGE_TARBALL}" --alias "${IMAGE_ALIAS}"
 
 echo ""
-echo "Done. Verify with: lxc launch ${IMAGE_ALIAS} rocky10-test --vm && lxc exec rocky10-test -- cat /etc/os-release"
+if [ "${IMAGE_TYPE}" = "vm" ]; then
+  echo "Done. Verify with: lxc launch ${IMAGE_ALIAS} rocky10-test --vm && lxc exec rocky10-test -- cat /etc/os-release"
+else
+  echo "Done. Verify with: lxc launch ${IMAGE_ALIAS} rocky10-test && lxc exec rocky10-test -- cat /etc/os-release"
+fi

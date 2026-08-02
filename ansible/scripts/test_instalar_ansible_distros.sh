@@ -3,16 +3,20 @@
 # installer via pipx) against the 2 latest stable releases of every distro it
 # aims to support: Ubuntu, Debian, Rocky Linux, Fedora and openSUSE.
 #
-# Rocky only has one release tested live (9): no LXD image is published for
-# Rocky 10 yet, same blocker already documented for lxd_host_bootstrap.
+# Rocky 10 has no *published* LXD image yet — same blocker documented in
+# ansible/roles/lxd_machine_provision/README.md — so it's tested against the
+# local "rockylinux/10" container image built by
+# ansible/scripts/build_rocky10_lxd_image.sh (`./build_rocky10_lxd_image.sh
+# x86_64 container`). Run that script first if the image isn't imported yet
+# (`lxc image list rockylinux/10`).
 # openSUSE tests Leap 16.0 + Tumbleweed instead of two Leap releases, since no
 # 15.x LXD image is published anymore either.
 #
-# For each distro: launches a plain throwaway LXD container, pushes the
+# For each distro: launches a plain throwaway LXD instance, pushes the
 # installer script into it, runs it as root with SKIP_CHECK_REQUISITOS=true
-# (no real LXD/lxc inside the test container, so the final check_requisitos.yml
+# (no real LXD/lxc inside the test instance, so the final check_requisitos.yml
 # step doesn't apply here), and checks that ansible-playbook ends up working.
-# Always deletes every test container afterwards, run succeeds or not.
+# Always deletes every test instance afterwards, run succeeds or not.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +29,7 @@ declare -A DISTRO_IMAGES=(
   [debian-12]="images:debian/12"
   [debian-13]="images:debian/13"
   [rocky-9]="images:rockylinux/9"
+  [rocky-10]="rockylinux/10"
   [fedora-43]="images:fedora/43"
   [fedora-44]="images:fedora/44"
   [opensuse-16]="images:opensuse/16.0"

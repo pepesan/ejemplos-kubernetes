@@ -25,5 +25,11 @@ galaxy_info:
       versions:
         - "43"
         - "44"
+    - name: openSUSE Leap
+      versions:
+        - "16.0"
+    - name: openSUSE Tumbleweed
+      versions:
+        - tumbleweed
 
 dependencies: []

@@ -2,12 +2,14 @@
 
 Prepares a physical (or virtual) host to run LXD-based Kubernetes labs:
 
-- Installs system dependencies (`snapd`, `curl`, the Python libraries the
-  `kubernetes.core` Ansible collection needs) and the required Ansible
-  Galaxy collections (`community.general`, `kubernetes.core`).
+- Installs system dependencies (`curl`, the Python libraries the
+  `kubernetes.core` Ansible collection needs, and `snapd` everywhere except
+  openSUSE — see below) and the required Ansible Galaxy collections
+  (`community.general`, `kubernetes.core`).
 - Loads and persists the kernel modules needed by the container runtime and
   CNI bridging (`overlay`, `br_netfilter`).
-- Installs LXD, `kubectl` and `helm` via snap.
+- Installs LXD, `kubectl` and `helm` via snap (native zypper packages plus a
+  binary download for `kubectl` on openSUSE — see below).
 - Initializes LXD (network bridge, storage pool, default profile) via
   `lxd init --preseed`, only if it isn't initialized yet.
 - Adds the host user to the `lxd` group.
@@ -23,8 +25,8 @@ always re-checks upstream).
 
 ## Requirements
 
-- Ubuntu 24.04/26.04, Debian 12 (bookworm)/13 (trixie), Rocky Linux 9 (10 once
-  an LXD image is published) or Fedora 43/44 host with `sudo`/root access.
+- Ubuntu 24.04/26.04, Debian 12 (bookworm)/13 (trixie), Rocky Linux 9/10, Fedora
+  43/44, or openSUSE Leap 16.0/Tumbleweed host with `sudo`/root access.
 - Real virtualization support for the `lxd_init` and `base_image` tasks
   (tagged `requires_virtualization`) — these cannot run inside a plain,
   unprivileged container. See `molecule/default/` for how this is tested.
@@ -50,6 +52,23 @@ everything needed), the role first enables the EPEL repository
 aren't available otherwise. The classic-snap `/snap` symlink workaround
 described above for Debian applies here too, unconditionally, since
 RHEL-family's `snapd` package doesn't create it either.
+
+### A note on openSUSE (Leap/Tumbleweed)
+
+openSUSE has no `snapd` package published at all (confirmed live: `zypper
+search snapd` returns nothing), so this distro family skips the snap-based
+install entirely. Instead, `tasks/snap_packages.yml` installs LXD and `helm`
+from their own native zypper packages (both genuine upstream builds, just
+packaged for SUSE), and `kubectl` via the same official-binary-plus-checksum
+method `ansible/base/00_instalar_ansible.sh` already uses on every distro,
+since no native `kubectl` package exists. openSUSE's native `lxd.service`
+also ships disabled by default — unlike the snap flavor used elsewhere,
+which activates automatically via its socket unit — so the role explicitly
+enables and starts it before `lxd_init.yml` runs. The package list itself
+(`vars/Suse.yml`) uses the version-independent `python3dist(...)` zypper
+capability syntax for the Kubernetes/JSON-patch/YAML Python libraries,
+since openSUSE versions those package names by Python release (e.g.
+`python313-kubernetes`) rather than a stable `python3-*` alias.
 
 ## Role Variables
 

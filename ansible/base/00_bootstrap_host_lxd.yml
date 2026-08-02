@@ -8,6 +8,31 @@
     lxd_network_subnet: "10.207.154.1/24"
     lxd_storage_pool_name: "default"
     host_user: "{{ lookup('env', 'USER') }}"
+    # Multidistribución (mismas distros que 00_instalar_ansible.sh), verificado en
+    # vivo. "python3-yaml" se llama "python3-pyyaml" en la familia RedHat. openSUSE
+    # no publica snapd ni paquetes "python3-*" con nombre estable (van versionados
+    # con el Python del sistema, p. ej. python313-kubernetes), así que ahí se usa
+    # la sintaxis de capacidad "python3dist(...)" de zypper, independiente de esa
+    # versión — confirmado en vivo que resuelve también python313-PyYAML, cuyo
+    # nombre real ni siquiera coincide en mayúsculas con "pyyaml".
+    paquetes_sistema:
+      Debian:
+        - snapd
+        - curl
+        - python3-kubernetes
+        - python3-jsonpatch
+        - python3-yaml
+      RedHat:
+        - snapd
+        - curl
+        - python3-kubernetes
+        - python3-jsonpatch
+        - python3-pyyaml
+      Suse:
+        - curl
+        - "python3dist(kubernetes)"
+        - "python3dist(jsonpatch)"
+        - "python3dist(pyyaml)"
 
   tasks:
     - name: 0a. Asegurar que existe el directorio ~/.ssh en el host
@@ -17,7 +42,17 @@
         mode: '0700'
       become: false
 
-    - name: 0b. Asegurar que existe el par de claves SSH (ed25519) en el host
+    - name: 0b1. Asegurar que ssh-keygen está disponible (openSUSE puede no traerlo instalado)
+      # Confirmado en vivo (contenedor de prueba openSUSE Leap 16.0): sin esto,
+      # la tarea siguiente falla con "Cannot find either the OpenSSH binary in
+      # the PATH or cryptography >= 3.3 installed on this system". El resto de
+      # distros soportadas ya lo traen de fábrica.
+      ansible.builtin.package:
+        name: openssh-clients
+        state: present
+      when: ansible_facts.os_family == 'Suse'
+
+    - name: 0b2. Asegurar que existe el par de claves SSH (ed25519) en el host
       # Se requiere para permitir que el host se conecte sin contraseña como root
       # a todas las VMs LXD creadas para el clúster.
       ansible.builtin.openssh_keypair:
@@ -26,26 +61,32 @@
         comment: "k8s-lxd-host-key"
       become: false
 
-    - name: 1. Instalar dependencias del sistema (snapd, curl, python libraries)
+    # Rocky/RHEL/CentOS necesitan EPEL habilitado antes de poder resolver
+    # snapd/python3-kubernetes/python3-jsonpatch (no están en sus repos base);
+    # Fedora ya los trae en los suyos propios. Debe ir antes de la instalación
+    # de paquetes de más abajo.
+    - name: 1a. Habilitar el repositorio EPEL (solo Rocky/RHEL/CentOS, no Fedora)
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+      when: ansible_facts.os_family == 'RedHat' and ansible_facts.distribution != 'Fedora'
+
+    - name: 1b. Instalar dependencias del sistema (snapd, curl, python libraries)
       # Explicación de dependencias:
-      # - snapd: Necesario para instalar LXD y herramientas CLI de Kubernetes (kubectl, helm).
+      # - snapd: Necesario para instalar LXD (excepto en openSUSE, ver más abajo) y
+      #   herramientas CLI de Kubernetes (kubectl, helm).
       # - curl: Utilidad básica de red para descargas y llamadas a APIs externas.
       # - python3-kubernetes: Biblioteca de Python requerida por el módulo 'kubernetes.core.k8s' de Ansible
       #   para interactuar con la API del clúster de Kubernetes de forma nativa.
       # - python3-jsonpatch: Requerido por Ansible para realizar parches dinámicos en los manifiestos K8s.
       #   sin este paquete, tareas de modificación de recursos de Kubernetes fallarán.
       # - python3-yaml: Requerido por la colección kubernetes.core para parsear archivos YAML.
-      ansible.builtin.apt:
-        name:
-          - snapd
-          - curl
-          - python3-kubernetes
-          - python3-jsonpatch
-          - python3-yaml
+      ansible.builtin.package:
+        name: "{{ paquetes_sistema[ansible_facts.os_family] }}"
         state: present
         update_cache: true
 
-    - name: 1b. Asegurar que las colecciones necesarias de Ansible Galaxy estén instaladas y actualizadas en el host
+    - name: 1c. Asegurar que las colecciones necesarias de Ansible Galaxy estén instaladas y actualizadas en el host
       community.general.ansible_galaxy_install:
         name: "{{ item }}"
         type: collection
@@ -73,13 +114,34 @@
         dest: /etc/modules-load.d/k8s-lxd-host.conf
         mode: '0644'
 
-    - name: 4. Instalar LXD a través de Snap
+    - name: 4a. Instalar LXD a través de Snap (todas las distros excepto openSUSE)
       # kubectl y helm ya no se instalan aquí: 00_instalar_ansible.sh los instala
       # a partir de sus binarios oficiales (mismo método en cualquier distro, no solo
       # las que tienen snapd), y ese script se ejecuta antes que este playbook.
       community.general.snap:
         name: lxd
         state: present
+      when: ansible_facts.os_family != 'Suse'
+
+    - name: 4b. Instalar LXD a través del paquete nativo de zypper (solo openSUSE, que no publica snapd)
+      # Confirmado en vivo: "zypper search snapd" no devuelve nada en openSUSE; en
+      # cambio sí existe un paquete "lxd" nativo (mismo LXD genuino de upstream,
+      # solo que empaquetado para SUSE).
+      ansible.builtin.package:
+        name: lxd
+        state: present
+      when: ansible_facts.os_family == 'Suse'
+
+    - name: 4c. Asegurar que el servicio systemd de lxd está habilitado y arrancado (solo openSUSE)
+      # A diferencia del snap (que se autoactiva vía su unidad de socket), el
+      # lxd.service nativo de openSUSE viene deshabilitado por defecto —
+      # confirmado en vivo: "lxc list" falla con "LXD unix socket ... not found"
+      # hasta que se ejecuta esto. Necesario antes de poder inicializar LXD abajo.
+      ansible.builtin.systemd:
+        name: lxd
+        enabled: true
+        state: started
+      when: ansible_facts.os_family == 'Suse'
 
     - name: 5. Comprobar si LXD ya está inicializado
       ansible.builtin.command: lxc network show "{{ lxd_network_name }}"

@@ -1,0 +1,16 @@
+---
+# openSUSE has no "snapd" package in its default repos (confirmed live:
+# "zypper search snapd" returns nothing on Leap 16.0) — LXD itself is
+# installed from its own native zypper package instead (see
+# snap_packages.yml), so snapd isn't part of this list at all. The
+# kubernetes/jsonpatch/pyyaml Python libraries are versioned by the system
+# Python release on openSUSE (e.g. python313-kubernetes), so they're
+# resolved via the version-independent "python3dist(...)" zypper capability
+# syntax instead of guessing the exact package name — confirmed live this
+# also correctly resolves "python313-PyYAML" for pyyaml, whose actual
+# package name doesn't even match "pyyaml" case-wise.
+lxd_system_packages:
+  - curl
+  - "python3dist(kubernetes)"
+  - "python3dist(jsonpatch)"
+  - "python3dist(pyyaml)"
