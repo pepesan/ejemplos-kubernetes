@@ -43,52 +43,47 @@ override `lxd_image` (globally or per host, same override pattern as
 ## Building images not yet published (e.g. Rocky Linux 10)
 
 `lxd_host_bootstrap`/`k8s_ha_cluster` support Rocky Linux 9 by copying the publicly published
-`images:rockylinux/9` remote image. Rocky Linux 10 has no published LXD/Incus image yet, so using it
-here means building one locally first, via [`distrobuilder`](https://github.com/lxc/distrobuilder)
-(`sudo snap install distrobuilder --classic`), then importing it with `lxc image import ... --alias
-rockylinux/10` (container) / `--alias rockylinux/10/vm` (VM) so `lxd_image`/`lxd_instance_type` can
-point at it exactly like any other alias.
+`images:rockylinux/9` remote image. Rocky Linux 10 has no published LXD/Incus image yet (re-confirmed
+2026-08-02: `lxc image list images:rockylinux/10` returns nothing, only Rocky 8/9 are published), so
+using it here means building one locally first and importing it with `lxc image import ... --alias
+rockylinux/10/vm` so `lxd_image`/`lxd_instance_type` can point at it exactly like any other alias.
 
-**Status: blocked on an upstream `distrobuilder` bug, not something fixable from this repo.**
-Attempted live 2026-07-18, real findings from real diagnostics at every step (no assumptions):
+**Status: resolved.** `ansible/scripts/build_rocky10_lxd_image.sh` builds and imports the image
+end-to-end; verified live 2026-08-02 (booted the result, confirmed `lxc exec`/`systemctl
+is-system-running` → `running`). It was first attempted 2026-07-18 and blocked on a genuine upstream
+`distrobuilder` bug at the time — see git history of this file for that session's diagnostics (wrong
+build subcommand, `btrfs-progs` dependency, a truncated-download red herring, and the GPG bootstrap
+failure). Three real problems had to be worked around to get from there to a working image, all
+confirmed live rather than assumed:
 
-1. **`distrobuilder build-lxd` doesn't exist** in current versions — LXD-compatible images are built
-   with `distrobuilder build-incus` (despite the name, it works fine with the `lxc` CLI; its own docs
-   confirm `--import-into-incus` literally shells out to `lxc image import`). The image definition
-   YAML (`rockylinux.yaml`) also isn't in the `distrobuilder` repo itself anymore — it moved to
-   `lxc/lxc-ci`'s `images/` directory.
-2. **VM builds need `btrfs-progs`** installed on the host (`distrobuilder` checks for the `btrfs`
-   binary before building a `--vm` qcow2 image) — a real, satisfiable dependency, not a bug.
-3. **The install ISO's `install.img` failed to mount** (`mount: ... cannot read superblock`,
-   confirmed via `strace` to be `mount("/dev/loopN", ..., "squashfs", ...) = -1 EIO`). Initially looked
-   like `distrobuilder` hardcoding `squashfs` when Rocky 10 (RHEL 10 family) actually ships an EROFS
-   image — but that turned out to be a **red herring**: the real cause, confirmed by comparing the
-   downloaded ISO's actual byte size against the real `Content-Length` from Rocky's mirror
-   (`2072444928` bytes expected, only `268467918` present), was a **truncated download** — two
-   `distrobuilder`/`wget` processes had been run close together and both written to the exact same
-   shared cache path (`/tmp/distrobuilder/rockylinux-10-x86_64/...iso`) concurrently, corrupting it.
-   Fixed by deleting the cache and downloading once, sequentially, with `wget` (verified byte-for-byte
-   against the real `Content-Length` before rebuilding) — **do not run more than one `distrobuilder`
-   build against the same not-yet-downloaded source at once.**
-4. **With a verified-complete ISO, the build gets much further** (real `dnf --installroot` package
-   resolution and download against Rocky's actual `BaseOS` repo) but then fails GPG verification on
-   every package: `distrobuilder`'s `rockylinux-http` downloader only successfully imports the
-   **Rocky 9** signing key (`0x350D275D`, "Release key 2022") into its internal bootstrap keyring, not
-   the Rocky 10 key — even though the image definition embeds all three (8/9/10) as armored blocks.
-   This happens inside `distrobuilder`'s own **hardcoded internal bootstrap step** (the very first
-   `dnf --installroot=/rootfs install basesystem Rocky-release yum`, before any of the YAML's own
-   `packages:`/`source.skip_verification` config even applies) — there is no user-facing option to
-   disable GPG checking for that specific internal call, confirmed against `distrobuilder`'s own
-   `source`/`packages` reference docs. Tried both the `latest/stable` (3.1, Oct 2024) and `latest/edge`
-   (git snapshot, mid-2025) snap channels — same failure on both, so this isn't fixed even in the
-   newest available build as of this session.
+1. **The `distrobuilder` snap is stale on both channels.** `latest/edge` is pinned to a build from
+   2025-06-18, which predates the upstream commit that actually added Rocky 10 support
+   (2025-08-03, "rockylinux: Add RockyLinux 10 support") — that commit is what fixes the GPG bootstrap
+   failure from the 2026-07-18 session, by adding `--nogpgcheck` to `distrobuilder`'s internal `dnf
+   --installroot` bootstrap step for release 10 ("since rpmkeys isn't available" in the install ISO).
+   There's no way to get this fix from the snap store today, so the script builds `distrobuilder` from
+   source (Go toolchain) instead of using the snap.
+2. **The upstream `rockylinux.yaml` (`lxc/lxc-ci`) only wires up its `incus-agent` generator for
+   Incus's virtio-serial port name** (`org.linuxcontainers.incus`). A host running Canonical LXD (not
+   Incus) names that same port `org.linuxcontainers.lxd` — confirmed by reading the actual
+   `-readconfig` `qemu.conf` LXD generates for a running VM. Without a matching udev rule, the rule
+   that starts `incus-agent.service` never fires: the VM boots with a working network, but `lxc
+   exec`/`lxc list` IPv4 forever report "LXD VM agent is not currently running". Fixed by appending a
+   second udev rule aliasing the LXD port name to the same `incus-agent.service`.
+3. **Even with the udev rule firing, the service still failed to start.** Confirmed by temporarily
+   overriding the agent-setup script to trace to the VM's serial console: the 9p mount fails (this
+   Rocky 10 build has no `9pnet_virtio` kernel module — 9p support isn't in the minimal variant), but
+   the `virtiofs` fallback mount succeeds and copies the config-drive contents fine. The real failure
+   is that **LXD's own config drive ships the agent binary as `lxd-agent`, not `incus-agent`** (that
+   naming comes from Incus's own image definition/unit), so `incus-agent.service`'s
+   `ExecStart=/run/incus_agent/incus-agent` finds nothing. Fixed by symlinking `incus-agent` to
+   `lxd-agent` in the setup script when only the latter is present, so the same image boots correctly
+   under either LXD or Incus.
 
-**Bottom line**: building a genuinely correct Rocky 10 image with `distrobuilder` as it currently
-stands isn't possible without either patching `distrobuilder` itself or manually re-implementing its
-bootstrap step outside the tool (`dnf --installroot --nogpgcheck` by hand, then `distrobuilder
-pack-lxc`/`pack-incus` on the pre-built rootfs) — real, substantial extra work, not attempted here.
-Rocky 10 stays unsupported in `k8s_ha_cluster`/`lxd_host_bootstrap` until either `distrobuilder` fixes
-this upstream or a published image appears on the public remote.
+None of this required patching `distrobuilder` itself — every fix is either building it fresh from
+source or a small addition to the local copy of the image definition YAML, both automated by the
+script. All three findings are specific to whatever `distrobuilder`/LXD versions were current on
+2026-08-02 — re-verify them (don't just re-run blindly) if either project has moved on since.
 
 ## Role Variables
 
