@@ -1,0 +1,4 @@
+kubeconfig.yaml
+ansible.log
+*.log
+rke2_install.log

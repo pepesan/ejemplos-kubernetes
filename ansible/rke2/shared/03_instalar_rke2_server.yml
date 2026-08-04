@@ -1,18 +1,24 @@
 ---
-- name: Instalación y Configuración de RKE2 Server Nodes
+# serial: 1 — in HA clusters (multiple server nodes) the primary server must be
+# fully Ready (with kube-vip advertising the VIP, when rke2_vip is defined)
+# BEFORE the additional servers try to join the etcd cluster through
+# https://<vip>:9345. On single-node labs it makes no difference.
+- name: Install and configure RKE2 Server nodes
   hosts: rke2_servers
+  serial: 1
   gather_facts: true
   vars:
     primary_server: "{{ groups['rke2_servers'][0] }}"
     is_primary: "{{ inventory_hostname == primary_server }}"
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
   tasks:
-    - name: Crear directorio /etc/rancher/rke2
+    - name: Create the /etc/rancher/rke2 directory
       ansible.builtin.file:
         path: /etc/rancher/rke2
         state: directory
         mode: "0755"
 
-    - name: Configurar /etc/rancher/rke2/config.yaml (Primer Server)
+    - name: Write /etc/rancher/rke2/config.yaml (primary server)
       ansible.builtin.copy:
         content: |
           write-kubeconfig-mode: "0644"
@@ -30,8 +36,9 @@
         dest: /etc/rancher/rke2/config.yaml
         mode: "0640"
       when: is_primary
+      notify: Restart rke2-server
 
-    - name: Configurar /etc/rancher/rke2/config.yaml (Server Adicional en HA)
+    - name: Write /etc/rancher/rke2/config.yaml (additional server in HA)
       ansible.builtin.copy:
         content: |
           server: "https://{{ rke2_vip | default(hostvars[primary_server].ansible_host) }}:9345"
@@ -44,24 +51,34 @@
         dest: /etc/rancher/rke2/config.yaml
         mode: "0640"
       when: not is_primary
+      notify: Restart rke2-server
 
-    - name: Comprobar si RKE2 Server ya está instalado
+    - name: Check whether RKE2 Server is already installed
       ansible.builtin.stat:
         path: /usr/local/bin/rke2
       register: rke2_bin
 
-    - name: Descargar e instalar RKE2 Server
-      ansible.builtin.shell: >
-        curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION="{{ rke2_version }}" sh -
+    - name: Download the RKE2 installer script
+      ansible.builtin.get_url:
+        url: https://get.rke2.io
+        dest: /tmp/rke2-install.sh
+        mode: "0755"
+        force: true
       when: not rke2_bin.stat.exists
 
-    - name: Habilitar y arrancar rke2-server
+    - name: Run the RKE2 Server installer
+      ansible.builtin.command: /tmp/rke2-install.sh
+      environment:
+        INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+      when: not rke2_bin.stat.exists
+
+    - name: Enable and start rke2-server
       ansible.builtin.systemd:
         name: rke2-server
         enabled: true
         state: started
 
-    - name: Configurar entorno y PATH para RKE2
+    - name: Set the RKE2 environment and PATH on the server
       ansible.builtin.copy:
         content: |
           export PATH=$PATH:/var/lib/rancher/rke2/bin
@@ -69,7 +86,7 @@
         dest: /etc/profile.d/rke2.sh
         mode: "0644"
 
-    - name: Crear symlinks para kubectl y crictl
+    - name: Create symlinks for kubectl and crictl
       ansible.builtin.file:
         src: "/var/lib/rancher/rke2/bin/{{ item }}"
         dest: "/usr/local/bin/{{ item }}"
@@ -79,37 +96,103 @@
         - kubectl
         - crictl
 
-    - name: Esperar kubeconfig en el servidor primario
+    - name: Wait for the RKE2 kubeconfig on the primary server
       ansible.builtin.wait_for:
         path: /etc/rancher/rke2/rke2.yaml
         timeout: 120
       when: is_primary
 
-    - name: Esperar a que el servidor primario esté Ready
-      ansible.builtin.command: /usr/local/bin/kubectl get nodes
-      environment:
-        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
-      register: node_status
-      until: "' Ready ' in node_status.stdout"
-      retries: 30
-      delay: 5
-      changed_when: false
-      when: is_primary
-
-    - name: Descargar kubeconfig.yaml del servidor primario al host local
+    - name: Fetch the kubeconfig from the primary server to the local host
       ansible.builtin.fetch:
         src: /etc/rancher/rke2/rke2.yaml
-        dest: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+        dest: "{{ local_kubeconfig }}"
         flat: true
       when: is_primary
 
-- name: Ajustar kubeconfig local
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  tasks:
-    - name: Reemplazar IP en kubeconfig local
+    - name: Point the local kubeconfig at the primary server IP
       ansible.builtin.replace:
-        path: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+        path: "{{ local_kubeconfig }}"
         regexp: 'https://127\.0\.0\.1:6443'
-        replace: "https://{{ rke2_vip | default(hostvars[groups['rke2_servers'][0]].ansible_host) }}:6443"
+        replace: "https://{{ hostvars[primary_server].ansible_host }}:6443"
+      delegate_to: localhost
+      when: is_primary
+
+    - name: Wait for the primary server to report Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ inventory_hostname }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      delegate_to: localhost
+      register: node_info
+      until: >
+        node_info.resources is defined and
+        node_info.resources | length > 0 and
+        node_info.resources[0].status.conditions is defined and
+        node_info.resources[0].status.conditions |
+          selectattr('type', 'equalto', 'Ready') |
+          selectattr('status', 'equalto', 'True') |
+          list | length > 0
+      retries: 30
+      delay: 5
+      when: is_primary
+
+    - name: Render the kube-vip manifest on localhost
+      ansible.builtin.template:
+        src: templates/kube-vip.yaml.j2
+        dest: /tmp/kube-vip-{{ inventory_hostname }}.yaml
+        mode: "0644"
+      delegate_to: localhost
+      vars:
+        kube_vip_effective_interface: "{{ kube_vip_interface | default(ansible_facts['default_ipv4']['interface']) }}"
+      when: is_primary and rke2_vip is defined
+
+    - name: Apply the kube-vip manifest
+      kubernetes.core.k8s:
+        state: present
+        src: "/tmp/kube-vip-{{ inventory_hostname }}.yaml"
+        kubeconfig: "{{ local_kubeconfig }}"
+      delegate_to: localhost
+      when: is_primary and rke2_vip is defined
+
+    - name: Wait for the kube-vip DaemonSet to be fully available
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: kube-vip-ds
+        namespace: kube-system
+        kubeconfig: "{{ local_kubeconfig }}"
+      delegate_to: localhost
+      register: kubevip_ds
+      retries: 30
+      delay: 5
+      until: >
+        kubevip_ds.resources is defined and
+        kubevip_ds.resources | length > 0 and
+        (kubevip_ds.resources[0].status.desiredNumberScheduled | default(0)) > 0 and
+        (kubevip_ds.resources[0].status.numberReady | default(0)) ==
+        (kubevip_ds.resources[0].status.desiredNumberScheduled)
+      when: is_primary and rke2_vip is defined
+
+    - name: Wait for the VIP to answer on port 6443
+      ansible.builtin.wait_for:
+        host: "{{ rke2_vip }}"
+        port: 6443
+        delay: 2
+        timeout: 60
+      delegate_to: localhost
+      when: is_primary and rke2_vip is defined
+
+    - name: Point the local kubeconfig at the VIP
+      ansible.builtin.replace:
+        path: "{{ local_kubeconfig }}"
+        regexp: "https://{{ hostvars[primary_server].ansible_host }}:6443"
+        replace: "https://{{ rke2_vip }}:6443"
+      delegate_to: localhost
+      when: is_primary and rke2_vip is defined
+
+  handlers:
+    - name: Restart rke2-server
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: restarted
