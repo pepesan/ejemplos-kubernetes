@@ -1,0 +1,52 @@
+---
+- name: Instalación y Configuración de RKE2 Worker / Agent Nodes
+  hosts: rke2_workers
+  gather_facts: true
+  vars:
+    primary_server: "{{ groups['rke2_servers'][0] }}"
+  tasks:
+    - name: Crear directorio /etc/rancher/rke2
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: "0755"
+
+    - name: Configurar /etc/rancher/rke2/config.yaml en Worker
+      ansible.builtin.copy:
+        content: |
+          server: "https://{{ rke2_vip | default(hostvars[primary_server].ansible_host) }}:9345"
+          token: "{{ rke2_token }}"
+          node-name: "{{ inventory_hostname }}"
+        dest: /etc/rancher/rke2/config.yaml
+        mode: "0640"
+
+    - name: Comprobar si RKE2 Agent ya está instalado
+      ansible.builtin.stat:
+        path: /usr/local/bin/rke2
+      register: rke2_agent_bin
+
+    - name: Descargar e instalar RKE2 Agent
+      ansible.builtin.shell: >
+        curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" INSTALL_RKE2_VERSION="{{ rke2_version }}" sh -
+      when: not rke2_agent_bin.stat.exists
+
+    - name: Habilitar y arrancar rke2-agent
+      ansible.builtin.systemd:
+        name: rke2-agent
+        enabled: true
+        state: started
+
+- name: Verificar incorporación de Workers desde el Server Primario
+  hosts: "{{ groups['rke2_servers'][0] }}"
+  gather_facts: false
+  tasks:
+    - name: Esperar a que todos los worker nodes reporten Ready
+      ansible.builtin.command: /usr/local/bin/kubectl get nodes
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      register: node_status
+      until: "node_status.stdout_lines | select('search', item) | select('search', 'Ready') | list | length > 0"
+      retries: 30
+      delay: 5
+      loop: "{{ groups['rke2_workers'] }}"
+      changed_when: false

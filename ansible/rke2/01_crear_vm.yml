@@ -1,0 +1,81 @@
+---
+- name: Crear la VM LXD para RKE2 Server
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_network: "lxdbr0"
+    lxd_image: "k8s-template"
+  tasks:
+    - name: Crear/actualizar máquina virtual LXD para el nodo RKE2
+      community.general.lxd_container:
+        name: "{{ item }}"
+        type: virtual-machine
+        state: started
+        source:
+          type: image
+          alias: "{{ lxd_image }}"
+        config:
+          limits.cpu: "{{ hostvars[item].lxd_cpu | string }}"
+          limits.memory: "{{ hostvars[item].lxd_mem }}"
+        devices:
+          eth0:
+            type: nic
+            network: "{{ lxd_network }}"
+            name: eth0
+            "ipv4.address": "{{ hostvars[item].ansible_host }}"
+          root:
+            type: disk
+            path: /
+            pool: default
+            size: "{{ hostvars[item].lxd_disk }}"
+        wait_for_ipv4_addresses: false
+        timeout: 90
+      loop: "{{ groups['rke2_servers'] }}"
+
+    - name: Esperar a que el agente de LXD esté listo en la máquina virtual
+      ansible.builtin.command: 'sg lxd -c "lxc exec {{ item }} -- true"'
+      register: lxd_agent_status
+      until: lxd_agent_status.rc == 0
+      retries: 30
+      delay: 2
+      loop: "{{ groups['rke2_servers'] }}"
+      changed_when: false
+
+    - name: Asegurar que el directorio .ssh existe en la máquina virtual
+      ansible.builtin.command: 'sg lxd -c "lxc exec {{ item }} -- mkdir -p /root/.ssh"'
+      loop: "{{ groups['rke2_servers'] }}"
+      changed_when: false
+
+    - name: Configurar permisos del directorio .ssh en la máquina virtual
+      ansible.builtin.command: 'sg lxd -c "lxc exec {{ item }} -- chmod 700 /root/.ssh"'
+      loop: "{{ groups['rke2_servers'] }}"
+      changed_when: false
+
+    - name: Inyectar clave pública SSH ed25519 en la máquina virtual
+      ansible.builtin.command: 'sg lxd -c "lxc file push ~/.ssh/id_ed25519.pub {{ item }}/root/.ssh/authorized_keys"'
+      loop: "{{ groups['rke2_servers'] }}"
+      changed_when: false
+
+    - name: Configurar propietario root del directorio .ssh y sus archivos
+      ansible.builtin.command: 'sg lxd -c "lxc exec {{ item }} -- chown -R root:root /root/.ssh"'
+      loop: "{{ groups['rke2_servers'] }}"
+      changed_when: false
+
+    - name: Configurar permisos del archivo authorized_keys en la máquina virtual
+      ansible.builtin.command: 'sg lxd -c "lxc exec {{ item }} -- chmod 600 /root/.ssh/authorized_keys"'
+      loop: "{{ groups['rke2_servers'] }}"
+      changed_when: false
+
+    - name: Esperar a que SSH esté disponible en la VM
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        delay: 2
+        timeout: 60
+      loop: "{{ groups['rke2_servers'] }}"
+
+    - name: VM creada y accesible por SSH
+      ansible.builtin.debug:
+        msg: "VM {{ item }} creada con IP {{ hostvars[item].ansible_host }}"
+      loop: "{{ groups['rke2_servers'] }}"

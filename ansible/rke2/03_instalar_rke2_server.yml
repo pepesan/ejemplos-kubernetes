@@ -1,0 +1,91 @@
+---
+- name: Instalación y Configuración de RKE2 Server Node
+  hosts: rke2_servers
+  gather_facts: true
+  tasks:
+    - name: Crear directorio de configuración /etc/rancher/rke2
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: "0755"
+
+    - name: Configurar /etc/rancher/rke2/config.yaml
+      ansible.builtin.copy:
+        content: |
+          write-kubeconfig-mode: "0644"
+          tls-san:
+            - "{{ ansible_host }}"
+            - "{{ inventory_hostname }}"
+          token: "{{ rke2_token }}"
+          cni: "{{ rke2_cni }}"
+        dest: /etc/rancher/rke2/config.yaml
+        mode: "0640"
+
+    - name: Comprobar si RKE2 Server ya está instalado
+      ansible.builtin.stat:
+        path: /usr/local/bin/rke2
+      register: rke2_bin
+    - name: Descargar e instalar RKE2 Server
+      ansible.builtin.shell: >
+        curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION="{{ rke2_version }}" sh -
+      when: not rke2_bin.stat.exists
+
+    - name: Habilitar y arrancar el servicio rke2-server
+      ansible.builtin.systemd:
+        name: rke2-server
+        enabled: true
+        state: started
+
+    - name: Configurar variables de entorno y PATH para RKE2 en el servidor
+      ansible.builtin.copy:
+        content: |
+          export PATH=$PATH:/var/lib/rancher/rke2/bin
+          export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+        dest: /etc/profile.d/rke2.sh
+        mode: "0644"
+
+    - name: Crear enlace simbólico para kubectl en /usr/local/bin
+      ansible.builtin.file:
+        src: /var/lib/rancher/rke2/bin/kubectl
+        dest: /usr/local/bin/kubectl
+        state: link
+        force: true
+
+    - name: Crear enlace simbólico para crictl en /usr/local/bin
+      ansible.builtin.file:
+        src: /var/lib/rancher/rke2/bin/crictl
+        dest: /usr/local/bin/crictl
+        state: link
+        force: true
+
+    - name: Esperar a que el archivo kubeconfig de RKE2 sea generado
+      ansible.builtin.wait_for:
+        path: /etc/rancher/rke2/rke2.yaml
+        timeout: 120
+
+    - name: Esperar a que el nodo RKE2 esté en estado Ready
+      ansible.builtin.command: /usr/local/bin/kubectl get nodes
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      register: node_status
+      until: "' Ready ' in node_status.stdout"
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Copiar kubeconfig.yaml al host local
+      ansible.builtin.fetch:
+        src: /etc/rancher/rke2/rke2.yaml
+        dest: "{{ playbook_dir }}/kubeconfig.yaml"
+        flat: true
+
+- name: Configurar kubeconfig local
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Actualizar IP del servidor en el kubeconfig local
+      ansible.builtin.replace:
+        path: "{{ playbook_dir }}/kubeconfig.yaml"
+        regexp: 'https://127\.0\.0\.1:6443'
+        replace: "https://{{ hostvars['rke2-server1'].ansible_host }}:6443"

@@ -1,0 +1,6 @@
+lxd_network: "lxdbr0"
+lxd_image: "k8s-template"
+rke2_version: "v1.31.2+rke2r1"
+rke2_server_ip: "10.207.154.60"
+rke2_cni: "canal"
+rke2_token: "secret-rke2-token-2026"

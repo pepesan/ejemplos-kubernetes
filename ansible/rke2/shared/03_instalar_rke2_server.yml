@@ -1,0 +1,115 @@
+---
+- name: Instalación y Configuración de RKE2 Server Nodes
+  hosts: rke2_servers
+  gather_facts: true
+  vars:
+    primary_server: "{{ groups['rke2_servers'][0] }}"
+    is_primary: "{{ inventory_hostname == primary_server }}"
+  tasks:
+    - name: Crear directorio /etc/rancher/rke2
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: "0755"
+
+    - name: Configurar /etc/rancher/rke2/config.yaml (Primer Server)
+      ansible.builtin.copy:
+        content: |
+          write-kubeconfig-mode: "0644"
+          tls-san:
+            - "{{ rke2_vip | default(hostvars[primary_server].ansible_host) }}"
+            - "{{ inventory_hostname }}"
+          token: "{{ rke2_token }}"
+          cni: "{{ rke2_cni | default('canal') }}"
+          {% if rke2_node_taints is defined %}
+          node-taint:
+            {% for t in rke2_node_taints %}
+            - "{{ t }}"
+            {% endfor %}
+          {% endif %}
+        dest: /etc/rancher/rke2/config.yaml
+        mode: "0640"
+      when: is_primary
+
+    - name: Configurar /etc/rancher/rke2/config.yaml (Server Adicional en HA)
+      ansible.builtin.copy:
+        content: |
+          server: "https://{{ rke2_vip | default(hostvars[primary_server].ansible_host) }}:9345"
+          write-kubeconfig-mode: "0644"
+          tls-san:
+            - "{{ rke2_vip | default(hostvars[primary_server].ansible_host) }}"
+            - "{{ inventory_hostname }}"
+          token: "{{ rke2_token }}"
+          cni: "{{ rke2_cni | default('canal') }}"
+        dest: /etc/rancher/rke2/config.yaml
+        mode: "0640"
+      when: not is_primary
+
+    - name: Comprobar si RKE2 Server ya está instalado
+      ansible.builtin.stat:
+        path: /usr/local/bin/rke2
+      register: rke2_bin
+
+    - name: Descargar e instalar RKE2 Server
+      ansible.builtin.shell: >
+        curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION="{{ rke2_version }}" sh -
+      when: not rke2_bin.stat.exists
+
+    - name: Habilitar y arrancar rke2-server
+      ansible.builtin.systemd:
+        name: rke2-server
+        enabled: true
+        state: started
+
+    - name: Configurar entorno y PATH para RKE2
+      ansible.builtin.copy:
+        content: |
+          export PATH=$PATH:/var/lib/rancher/rke2/bin
+          export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+        dest: /etc/profile.d/rke2.sh
+        mode: "0644"
+
+    - name: Crear symlinks para kubectl y crictl
+      ansible.builtin.file:
+        src: "/var/lib/rancher/rke2/bin/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        state: link
+        force: true
+      loop:
+        - kubectl
+        - crictl
+
+    - name: Esperar kubeconfig en el servidor primario
+      ansible.builtin.wait_for:
+        path: /etc/rancher/rke2/rke2.yaml
+        timeout: 120
+      when: is_primary
+
+    - name: Esperar a que el servidor primario esté Ready
+      ansible.builtin.command: /usr/local/bin/kubectl get nodes
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      register: node_status
+      until: "' Ready ' in node_status.stdout"
+      retries: 30
+      delay: 5
+      changed_when: false
+      when: is_primary
+
+    - name: Descargar kubeconfig.yaml del servidor primario al host local
+      ansible.builtin.fetch:
+        src: /etc/rancher/rke2/rke2.yaml
+        dest: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+        flat: true
+      when: is_primary
+
+- name: Ajustar kubeconfig local
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Reemplazar IP en kubeconfig local
+      ansible.builtin.replace:
+        path: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+        regexp: 'https://127\.0\.0\.1:6443'
+        replace: "https://{{ rke2_vip | default(hostvars[groups['rke2_servers'][0]].ansible_host) }}:6443"

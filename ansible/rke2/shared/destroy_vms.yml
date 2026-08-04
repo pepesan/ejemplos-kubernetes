@@ -1,0 +1,11 @@
+---
+- name: Destruir VMs del clúster RKE2 definidas en inventario
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Forzar borrado de VMs en LXD
+      ansible.builtin.command: 'sg lxd -c "lxc delete -f {{ item }}"'
+      loop: "{{ groups['rke2_cluster'] }}"
+      failed_when: false
+      changed_when: true

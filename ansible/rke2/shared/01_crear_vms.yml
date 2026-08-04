@@ -1,0 +1,81 @@
+---
+- name: Crear/actualizar VMs LXD para el clúster RKE2
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    lxd_network: "lxdbr0"
+    lxd_image: "k8s-template"
+  tasks:
+    - name: Crear/actualizar instancias VM en LXD
+      community.general.lxd_container:
+        name: "{{ item }}"
+        type: virtual-machine
+        state: started
+        source:
+          type: image
+          alias: "{{ lxd_image }}"
+        config:
+          limits.cpu: "{{ hostvars[item].lxd_cpu | default('2') | string }}"
+          limits.memory: "{{ hostvars[item].lxd_mem | default('4GiB') }}"
+        devices:
+          eth0:
+            type: nic
+            network: "{{ lxd_network }}"
+            name: eth0
+            "ipv4.address": "{{ hostvars[item].ansible_host }}"
+          root:
+            type: disk
+            path: /
+            pool: default
+            size: "{{ hostvars[item].lxd_disk | default('20GiB') }}"
+        wait_for_ipv4_addresses: false
+        timeout: 90
+      loop: "{{ groups['rke2_cluster'] }}"
+
+    - name: Esperar a que el agente LXD responda en cada VM
+      ansible.builtin.command: 'sg lxd -c "lxc exec {{ item }} -- true"'
+      register: lxd_agent_status
+      until: lxd_agent_status.rc == 0
+      retries: 30
+      delay: 2
+      loop: "{{ groups['rke2_cluster'] }}"
+      changed_when: false
+
+    - name: Configurar directorio .ssh en cada VM
+      ansible.builtin.command: 'sg lxd -c "lxc exec {{ item.0 }} -- {{ item.1 }}"'
+      loop: "{{ groups['rke2_cluster'] | product([
+        'mkdir -p /root/.ssh',
+        'chmod 700 /root/.ssh'
+      ]) | list }}"
+      loop_control:
+        label: "{{ item.0 }} -> {{ item.1 }}"
+      changed_when: false
+
+    - name: Inyectar clave pública SSH ed25519 en cada VM
+      ansible.builtin.command: 'sg lxd -c "lxc file push ~/.ssh/id_ed25519.pub {{ item }}/root/.ssh/authorized_keys"'
+      loop: "{{ groups['rke2_cluster'] }}"
+      changed_when: false
+
+    - name: Fijar permisos SSH en cada VM
+      ansible.builtin.command: 'sg lxd -c "lxc exec {{ item.0 }} -- {{ item.1 }}"'
+      loop: "{{ groups['rke2_cluster'] | product([
+        'chown -R root:root /root/.ssh',
+        'chmod 600 /root/.ssh/authorized_keys'
+      ]) | list }}"
+      loop_control:
+        label: "{{ item.0 }} -> {{ item.1 }}"
+      changed_when: false
+
+    - name: Esperar conectividad SSH en el puerto 22
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        delay: 2
+        timeout: 60
+      loop: "{{ groups['rke2_cluster'] }}"
+
+    - name: VMs creadas y accesibles por SSH
+      ansible.builtin.debug:
+        msg: "VM {{ item }} lista en IP {{ hostvars[item].ansible_host }}"
+      loop: "{{ groups['rke2_cluster'] }}"
