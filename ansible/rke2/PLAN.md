@@ -23,7 +23,7 @@ Para evitar duplicar código entre los laboratorios, toda la lógica de infraest
 | --- | --- | --- | --- | --- |
 | **01** | **Requisitos: Hardware y Red** (`01_requisitos_hardware_red`) | ✅ Validado | `v1.35.6+rke2r1` | Documentación completa de vCPU/RAM/disco, sysctl y matriz de puertos (`6443`, `9345`, `2379-2380`, `8472`). |
 | **02** | **Server Node Mono-nodo** (`02_rke2_server_single_node`) | ✅ Validado en Vivo | `v1.35.6+rke2r1` | VM LXD `rke2-server1` aprovisionada, `rke2-server.service` en ejecución, `kubeconfig.yaml` local ajustado y verificado en vivo. |
-| **03** | **Configuración de CNI** (`03_cni_configuration`) | 🟡 Estructurado | `v1.35.6+rke2r1` | Estructurado con CNI Cilium (`cni: cilium`). Pendiente de validación de tráfico de pods e Ingress con Cilium. |
+| **03** | **Configuración de CNI** (`03_cni_configuration`) | ✅ Validado en Vivo | `v1.35.6+rke2r1` | Probado en vivo con CNI **Cilium** (`cni: cilium`), pod `cilium-operator` y agentes `cilium-dt8bd` en estado `Running`. |
 | **04** | **Worker Node (Agent)** (`04_worker_node_agent`) | 🟡 Estructurado | `v1.35.6+rke2r1` | Estructurado para 1 Server + 2 Workers (`rke2-worker1/2`). Pendiente de prueba de carga y resiliencia. |
 | **05** | **Alta Disponibilidad (HA)** (`05_ha_cluster_etcd`) | 🟡 Estructurado | `v1.35.6+rke2r1` | Estructurado con 3 Servers (etcd distribuido) + 2 Workers. Pendiente de prueba de conmutación y caída de nodos. |
 | **06** | **Docker Registry Privado** (`06_docker_private_registry`) | 🟡 Estructurado | `v1.35.6+rke2r1` | Estructurado para inyectar `/etc/rancher/rke2/registries.yaml` (mirrors y auth). Pendiente de prueba con registry local. |
