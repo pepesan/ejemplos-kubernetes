@@ -1,17 +1,17 @@
 ---
-- name: Instalación y Configuración de RKE2 Worker / Agent Nodes
+- name: Install and configure RKE2 Worker / Agent nodes
   hosts: rke2_workers
   gather_facts: true
   vars:
     primary_server: "{{ groups['rke2_servers'][0] }}"
   tasks:
-    - name: Crear directorio /etc/rancher/rke2
+    - name: Create the /etc/rancher/rke2 directory
       ansible.builtin.file:
         path: /etc/rancher/rke2
         state: directory
         mode: "0755"
 
-    - name: Configurar /etc/rancher/rke2/config.yaml en Worker
+    - name: Write /etc/rancher/rke2/config.yaml on the worker
       ansible.builtin.copy:
         content: |
           server: "https://{{ rke2_vip | default(hostvars[primary_server].ansible_host) }}:9345"
@@ -19,34 +19,78 @@
           node-name: "{{ inventory_hostname }}"
         dest: /etc/rancher/rke2/config.yaml
         mode: "0640"
+      notify: Restart rke2-agent
 
-    - name: Comprobar si RKE2 Agent ya está instalado
+    - name: Check whether RKE2 Agent is already installed
       ansible.builtin.stat:
         path: /usr/local/bin/rke2
       register: rke2_agent_bin
 
-    - name: Descargar e instalar RKE2 Agent
-      ansible.builtin.shell: >
-        curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" INSTALL_RKE2_VERSION="{{ rke2_version }}" sh -
+    - name: Download the RKE2 installer script
+      ansible.builtin.get_url:
+        url: https://get.rke2.io
+        dest: /tmp/rke2-install.sh
+        mode: "0755"
+        force: true
       when: not rke2_agent_bin.stat.exists
 
-    - name: Habilitar y arrancar rke2-agent
+    - name: Run the RKE2 Agent installer
+      ansible.builtin.command: /tmp/rke2-install.sh
+      environment:
+        INSTALL_RKE2_TYPE: agent
+        INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+      when: not rke2_agent_bin.stat.exists
+
+    - name: Enable and start rke2-agent
       ansible.builtin.systemd:
         name: rke2-agent
         enabled: true
         state: started
 
-- name: Verificar incorporación de Workers desde el Server Primario
-  hosts: "{{ groups['rke2_servers'][0] }}"
+  handlers:
+    - name: Restart rke2-agent
+      ansible.builtin.systemd:
+        name: rke2-agent
+        state: restarted
+
+- name: Verify worker registration from localhost
+  hosts: localhost
+  connection: local
   gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
   tasks:
-    - name: Esperar a que todos los worker nodes reporten Ready
-      ansible.builtin.command: /usr/local/bin/kubectl get nodes
-      environment:
-        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
-      register: node_status
-      until: "node_status.stdout_lines | select('search', item) | select('search', 'Ready') | list | length > 0"
+    - name: Wait for every worker node to report Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ item }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: worker_node
+      until: >
+        worker_node.resources is defined and
+        worker_node.resources | length > 0 and
+        worker_node.resources[0].status.conditions is defined and
+        worker_node.resources[0].status.conditions |
+          selectattr('type', 'equalto', 'Ready') |
+          selectattr('status', 'equalto', 'True') |
+          list | length > 0
       retries: 30
       delay: 5
       loop: "{{ groups['rke2_workers'] }}"
-      changed_when: false
+
+    # The kubelet REFUSES node-role.kubernetes.io/* labels passed via its own
+    # --node-labels (reserved namespace, exits status 1). The label must be
+    # applied through the API server instead — kubernetes.core.k8s handles
+    # idempotency natively (no change when the label already exists).
+    - name: Assign the worker role label to the agents
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Node
+        name: "{{ item }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          metadata:
+            labels:
+              node-role.kubernetes.io/worker: "true"
+      loop: "{{ groups['rke2_workers'] }}"
