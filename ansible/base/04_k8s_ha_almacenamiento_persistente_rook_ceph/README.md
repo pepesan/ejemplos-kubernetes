@@ -3,7 +3,27 @@
 Este laboratorio contiene una serie de playbooks de Ansible para desplegar de forma automatizada un clúster de Kubernetes (1 nodo Control-Plane/Manager y 3 nodos Workers) y, sobre este, aprovisionar un clúster de almacenamiento distribuido Ceph utilizando el operador **Rook**.
 
 Cada nodo worker cuenta con un disco virtual secundario `/dev/vdb` que Rook Ceph utilizará automáticamente para crear OSDs (Object Storage Daemons) y replicar los datos en 3 vías.
+## 📋 Mapeo con el Temario: "7.- CEPH"
 
+| Punto del Temario | Implementación / Ejemplo en este Laboratorio | Fichero / Tarea |
+| --- | --- | --- |
+| **• Introducción** | Conceptos de Ceph como sistema de almacenamiento unificado de bloques (RBD), archivos (CephFS) u objetos (RGW), distribuido y auto-sanable. | Documentado en `README.md` |
+| **• Funcionalidades** | Replicación CRUSH map en 3 vías, OSDs automáticos en discos `/dev/vdb`, autorrecuperación tras caída de nodos, Ceph Dashboard con métricas Prometheus y `rook-ceph-tools`. | `10_desplegar_rook_ceph.yml`, `12_desplegar_prometheus.yml` |
+| **• Integración con K8S** | Despliegue hiperconvergente mediante el operador **Rook** (`rook-release/rook-ceph`), exponiendo las clases de almacenamiento `ceph-block` (RBD / RWO) y `ceph-filesystem` (CephFS / RWX). | `10_desplegar_rook_ceph.yml` |
+| **• Comparación con Longhorn** | Comparación detallada de arquitectura, consumo de recursos y escenarios de uso (ver tabla comparativa abajo). | Documentado en `README.md` |
+
+---
+
+### ⚖️ Comparación Técnica: Rook Ceph vs. Longhorn
+
+| Característica | **Rook Ceph** (Este Laboratorio `base/04`) | **Longhorn** (`base/03` y `rke2/08`) |
+| --- | --- | --- |
+| **Arquitectura** | Hiperconvergente con daemons dedicados (`mon`, `mgr`, `osd`, `mds`) y motor de mapeo CRUSH. | Ligera y nativa K8s; motor iSCSI por volumen + `share-manager` NFS para RWX. |
+| **Requisitos de Disco** | Requiere **discos secundarios en bloque/raw** dedicados (p. ej. `/dev/vdb` OSDs). | Funciona sobre el sistema de archivos existente del sistema operativo de las VMs. |
+| **Consumo de Recursos** | **Alto** (Monitors y OSDs requieren 2-4GB RAM por nodo). | **Bajo / Moderado** (Optimizado para clústeres edge o pequeños/medianos). |
+| **Casos de Uso** | Entornos empresariales masivos a escala de Petabytes con requerimientos de bloque y archivos distribuidos. | Clústeres K8s / RKE2 donde priman la simplicidad operativa y el despliegue rápido. |
+
+---
 ## 📋 Estructura de Playbooks
 
 *   **`ansible.cfg`**: Configuración de Ansible para este entorno.

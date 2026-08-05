@@ -1,7 +1,16 @@
 # Laboratorio K8s + Clúster Ceph Externo e Independiente sobre LXD
 
 Este laboratorio contiene el diseño y las herramientas para desplegar e integrar un clúster de Kubernetes con un clúster de almacenamiento **Ceph Externo** e independiente, simulando un entorno empresarial donde el almacenamiento no reside dentro de Kubernetes sino en un clúster de almacenamiento físico o virtual separado.
+## 📋 Mapeo con el Temario: "7.- CEPH"
 
+| Punto del Temario | Implementación / Ejemplo en este Laboratorio | Fichero / Tarea |
+| --- | --- | --- |
+| **• Introducción** | Arquitectura desacoplada de Ceph como almacenamiento externo fuera de Kubernetes, desplegado con `cephadm` oficial. | Documentado en `README.md` |
+| **• Funcionalidades** | Gestión independiente de `ceph-mon` y `ceph-osd`, pool de almacenamiento RBD `rbd-k8s`, secretos `client.admin` y Ceph Dashboard. | `10_desplegar_ceph_externo.yml` |
+| **• Integración con K8S** | Integración transparente con Kubernetes mediante el controlador **Ceph-CSI** (`ceph-csi-operator` / `ceph-csi-drivers`) y la StorageClass `ceph-block-external`. | `11_integrar_k8s_ceph_externo.yml` |
+| **• Comparación con Longhorn** | Comparativa de almacenamiento Ceph dedicado externo frente a soluciones hiperconvergentes / nativas K8s como Longhorn. | Documentado en `README.md` |
+
+---
 ---
 
 ## 🏗️ Arquitectura del Entorno
