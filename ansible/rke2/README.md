@@ -15,6 +15,9 @@ Cada subdirectorio se corresponde con los puntos clave del temario:
 | **HA (Alta Disponibilidad)** | [`05_ha_cluster_etcd/`](05_ha_cluster_etcd/) | Clúster HA con 3 Server Nodes (etcd distribuido) + VIP/LoadBalancer para el API server (6443) y el supervisor (9345). |
 | **Docker Registry** | [`06_docker_private_registry/`](06_docker_private_registry/) | Configuración de registros de imágenes privados / mirrors en Containerd vía `/etc/rancher/rke2/registries.yaml`. |
 | **Actualizaciones** | [`07_actualizaciones_cluster/`](07_actualizaciones_cluster/) | Estrategias de actualización de RKE2 (rolling upgrade vía Ansible y vía Rancher System Upgrade Controller). |
+| **Almacenamiento Avanzado & Longhorn** | [`08_longhorn_storage/`](08_longhorn_storage/) | Módulo completo de almacenamiento: **Persistent Volumes (PV)**, **Persistent Volume Claims (PVC)**, **Storage Classes**, modos de acceso **ReadWriteOnce (RWO)**, **ReadWriteMany (RWX)** multi-nodo y **Longhorn v1.12.0** (iSCSI, Helm, Online Expansion 1Gi->2Gi). |
+| **Panel de Control Web** | [`09_dashboard_headlamp/`](09_dashboard_headlamp/) | Despliegue de Headlamp (CNCF Dashboard), servicio NodePort (30090), generación de token `headlamp-admin` guardado en `headlamp_token.txt`. |
+| **Monitorización y Logging** | [`10_observabilidad_prometheus_grafana_loki/`](10_observabilidad_prometheus_grafana_loki/) | Stack unificado de observabilidad: **Prometheus Operator** (NodePort 30090), **Grafana** (NodePort 30080), **Loki** + **Promtail/FluentBit** (logs) y datasource pre-configurado. |
 
 ---
 

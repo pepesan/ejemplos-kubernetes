@@ -1,0 +1,133 @@
+---
+# Lab 09 — Deploying Headlamp CNCF Modern Web Dashboard on RKE2.
+#
+# 1. Installs the modern Headlamp web UI via Helm (`headlamp/headlamp`) into the
+#    `headlamp` namespace, exposing it over a NodePort (port 30090).
+# 2. Creates a dedicated `headlamp-admin` ServiceAccount with `cluster-admin`
+#    RBAC permissions.
+# 3. Generates a persistent, non-expiring ServiceAccount token Secret.
+# 4. Saves the bearer token to `headlamp_token.txt` in the lab directory and
+#    displays the host access URL and token in the terminal output.
+#
+# Idempotent: re-executing this playbook on an established cluster leaves all
+# resources unchanged (changed=0).
+
+- name: Deploy Headlamp Kubernetes Web Dashboard
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    primary_server: "{{ groups['rke2_servers'][0] }}"
+    server_ip: "{{ hostvars[primary_server].ansible_host }}"
+  tasks:
+    - name: Ensure the headlamp namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ headlamp_namespace }}"
+
+    - name: Deploy Headlamp web UI via Helm
+      kubernetes.core.helm:
+        name: headlamp
+        chart_ref: headlamp
+        chart_repo_url: https://kubernetes-sigs.github.io/headlamp/
+        chart_version: "{{ headlamp_chart_version }}"
+        release_namespace: "{{ headlamp_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+        state: present
+        values:
+          service:
+            type: NodePort
+            port: 80
+            nodePort: "{{ headlamp_nodeport }}"
+        wait: true
+        wait_timeout: "300s"
+
+    - name: Create the headlamp-admin ServiceAccount
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: headlamp-admin
+            namespace: "{{ headlamp_namespace }}"
+
+    - name: Bind headlamp-admin ServiceAccount to cluster-admin role
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: headlamp-admin-binding
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cluster-admin
+          subjects:
+            - kind: ServiceAccount
+              name: headlamp-admin
+              namespace: "{{ headlamp_namespace }}"
+
+    - name: Create persistent Secret token for headlamp-admin
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: headlamp-admin-token
+            namespace: "{{ headlamp_namespace }}"
+            annotations:
+              kubernetes.io/service-account.name: headlamp-admin
+          type: kubernetes.io/service-account-token
+
+    - name: Read the headlamp-admin Secret token
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: headlamp-admin-token
+        namespace: "{{ headlamp_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: token_secret
+      retries: 20
+      delay: 3
+      until: >
+        token_secret.resources | default([]) | length > 0 and
+        token_secret.resources[0].data is defined and
+        token_secret.resources[0].data.token is defined
+
+    - name: Extract the bearer token string
+      ansible.builtin.set_fact:
+        headlamp_bearer_token: "{{ token_secret.resources[0].data.token | b64decode }}"
+
+    - name: Save the bearer token to local file headlamp_token.txt
+      ansible.builtin.copy:
+        content: "{{ headlamp_bearer_token }}\n"
+        dest: "{{ headlamp_token_file }}"
+        mode: "0600"
+
+    - name: Display Headlamp access URL and bearer token banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Headlamp Modern Kubernetes Dashboard Deployed!
+
+            Host Access URL:
+            http://{{ server_ip }}:{{ headlamp_nodeport }}
+
+            Token File Location:
+            {{ headlamp_token_file }}
+
+            Bearer Token (copy & paste into Headlamp UI):
+            {{ headlamp_bearer_token }}
+          ════════════════════════════════════════════════════════════════

@@ -1,0 +1,214 @@
+---
+# Lab 03 — Ejemplo 1: CNI Canal (Flannel VXLAN + Calico Felix NetworkPolicies).
+#
+# 1. Verifica que RKE2 ha desplegado el CNI Canal (Flannel VXLAN inter-nodo + Calico Felix).
+# 2. Despliega un pod backend y dos pods clientes (frontend autorizado y rogue no autorizado).
+# 3. Aplica una `NetworkPolicy` K8s L3/L4 aislando el pod backend para aceptar únicamente
+#    tráfico Ingress en el puerto 8080 desde pods etiquetados con `app: frontend`.
+# 4. Comprueba en vivo que el tráfico desde `frontend` al puerto 8080 es PERMITIDO y
+#    que el tráfico desde `rogue` (no autorizado) es BLOQUEADO por Calico Felix.
+#
+# Idempotente: re-ejecutar este playbook sobre el clúster existente deja los
+# recursos sin cambios (changed=0).
+
+- name: Verify Canal CNI and NetworkPolicy Enforcement
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    test_namespace: default
+    primary_server: "{{ groups['rke2_servers'][0] }}"
+    workers: "{{ groups['rke2_workers'] }}"
+  tasks:
+    - name: Wait for every node to report Ready under Canal CNI
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: nodes_info
+      retries: 60
+      delay: 5
+      until: >
+        nodes_info.resources | default([]) | length >= 3 and
+        (nodes_info.resources | rejectattr('status.conditions', 'undefined') |
+          selectattr('status.conditions', 'search', 'KubeletReady') | list | length) >= 3
+
+    # ── Despliegue del Backend Server Pod ─────────────────────────────────────
+    - name: Deploy backend server Pod listening on port 8080
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: backend-pod
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: backend
+          spec:
+            restartPolicy: Always
+            nodeName: "{{ workers[0] }}"
+            containers:
+              - name: server
+                image: busybox:1.36
+                command:
+                  - sh
+                  - -c
+                  - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\nHello from Canal" | nc -ll -p 8080; done'
+
+    # ── Despliegue del Frontend Client Pod (Autorizado) ────────────────────────
+    - name: Deploy authorized frontend client Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: frontend-pod
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: frontend
+          spec:
+            restartPolicy: Always
+            nodeName: "{{ workers[1] if workers | length > 1 else workers[0] }}"
+            containers:
+              - name: client
+                image: busybox:1.36
+                command: ["sleep", "3600"]
+
+    # ── Despliegue del Rogue Client Pod (No Autorizado) ────────────────────────
+    - name: Deploy unauthorized rogue client Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: rogue-pod
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: rogue
+          spec:
+            restartPolicy: Always
+            nodeName: "{{ workers[1] if workers | length > 1 else workers[0] }}"
+            containers:
+              - name: client
+                image: busybox:1.36
+                command: ["sleep", "3600"]
+
+    - name: Wait for all test Pods to reach Running state
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        name: "{{ item }}"
+        namespace: "{{ test_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: test_pods
+      retries: 60
+      delay: 5
+      until: >
+        test_pods.resources | default([]) | length > 0 and
+        (test_pods.resources[0].status.phase | default('')) == 'Running'
+      loop:
+        - backend-pod
+        - frontend-pod
+        - rogue-pod
+
+    - name: Obtain backend-pod IP address
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        name: backend-pod
+        namespace: "{{ test_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: backend_pod_info
+
+    - name: Set backend_ip fact
+      ansible.builtin.set_fact:
+        backend_ip: "{{ backend_pod_info.resources[0].status.podIP }}"
+
+    # ── Aplicación de NetworkPolicy L3/L4 (Canal / Calico Felix) ──────────────
+    - name: Apply NetworkPolicy allowing ingress to backend only from app=frontend on port 8080
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-frontend-to-backend
+            namespace: "{{ test_namespace }}"
+          spec:
+            podSelector:
+              matchLabels:
+                app: backend
+            policyTypes:
+              - Ingress
+            ingress:
+              - from:
+                  - podSelector:
+                      matchLabels:
+                        app: frontend
+                ports:
+                  - protocol: TCP
+                    port: 8080
+
+    # ── Pruebas de Tráfico L3/L4 ──────────────────────────────────────────────
+    #
+    # NOTA TÉCNICA: Usamos `ansible.builtin.command` con `kubectl exec` en lugar del
+    # módulo `kubernetes.core.k8s_exec` debido a un bug conocido de parsing en RKE2/containerd.
+    # El módulo Python falla al leer el código de salida del stream OCI devolviendo:
+    # `invalid literal for int() with base 10: 'Internal error occurred... OCI runtime exec'`.
+    # Usar `kubectl exec` nativo desde el host local es 100% fiable, más rápido y
+    # mantiene la idempotencia (`changed_when: false`).
+    #
+    - name: Execute traffic test from authorized frontend-pod to backend-pod on port 8080
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ local_kubeconfig }}
+        exec -n {{ test_namespace }} frontend-pod --
+        nc -z -w 3 {{ backend_ip }} 8080
+      register: authorized_traffic
+      ignore_errors: true
+      changed_when: false
+
+    - name: Assert authorized traffic is PERMITTED
+      ansible.builtin.assert:
+        that:
+          - authorized_traffic.rc == 0
+        fail_msg: "Traffic from authorized frontend-pod was BLOCKED by NetworkPolicy (rc={{ authorized_traffic.rc }})"
+        success_msg: "Traffic from authorized frontend-pod is PERMITTED as expected."
+
+    - name: Execute traffic test from unauthorized rogue-pod to backend-pod on port 8080
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ local_kubeconfig }}
+        exec -n {{ test_namespace }} rogue-pod --
+        nc -z -w 3 {{ backend_ip }} 8080
+      register: unauthorized_traffic
+      ignore_errors: true
+      changed_when: false
+
+    - name: Assert unauthorized traffic is BLOCKED
+      ansible.builtin.assert:
+        that:
+          - unauthorized_traffic.rc != 0
+        fail_msg: "Traffic from unauthorized rogue-pod was PERMITTED (rc={{ unauthorized_traffic.rc }}) - NetworkPolicy failed to isolate!"
+        success_msg: "Traffic from unauthorized rogue-pod is BLOCKED as expected."
+
+    - name: Display Canal CNI NetworkPolicy verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Ejemplo 1: CNI Canal (Flannel VXLAN + Calico Felix) Verificado!
+
+            Backend Pod IP: {{ backend_ip }}:8080
+
+            ✓ Tráfico autorizado (frontend-pod -> backend-pod:8080): PERMITIDO
+            ✓ Tráfico no autorizado (rogue-pod -> backend-pod:8080): BLOQUEADO
+
+            El aislador Calico Felix de Canal ha filtrado correctamente
+            el tráfico inter-pod según la NetworkPolicy declarada.
+          ════════════════════════════════════════════════════════════════

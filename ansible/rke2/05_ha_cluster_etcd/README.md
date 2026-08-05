@@ -7,6 +7,7 @@ Este laboratorio describe cómo desplegar un clúster RKE2 en **Alta Disponibili
 * **Server Node 1 (`10.207.154.61`):** Primer Server (inicializa el clúster `etcd`).
 * **Server Node 2 (`10.207.154.62`):** Segundo Server (se une al clúster `etcd`).
 * **Server Node 3 (`10.207.154.63`):** Tercer Server (completa el quórum de 3 en `etcd`).
+* **Worker Nodes (`10.207.154.64-66`):** 3 nodos de trabajo (`rke2-worker1`, `rke2-worker2`, `rke2-worker3`).
 * **VIP / LoadBalancer (`10.207.154.60`):**
   - Puerto `6443` -> Balancea tráfico hacia los 3 servers.
   - Puerto `9345` -> Balancea tráfico de registro hacia los 3 servers.

@@ -3,3 +3,9 @@ lxd_image: "k8s-template"
 rke2_version: "v1.35.6+rke2r1"
 rke2_cni: "canal"
 rke2_token: "secret-rke2-token-2026"
+
+# Lab 06 — local pull-through registry mirror (registry:2 on the LXD host).
+# Nodes reach it at http://<host>:5000 over the lxdbr0 gateway.
+registry_container_name: "rke2-registry-mirror"
+registry_mirror_host: "10.207.154.1"
+registry_mirror_port: 5000

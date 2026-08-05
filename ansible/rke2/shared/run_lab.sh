@@ -29,6 +29,15 @@ if grep -q "\[rke2_workers\]" inventory.ini 2>/dev/null && grep -A 10 "\[rke2_wo
   run_step 05 "$SCRIPT_DIR/04_instalar_rke2_agent.yml"    "Install and join the RKE2 Worker / Agent node(s)"
 fi
 
+# Run any lab-specific post-deployment playbooks present in the lab directory
+# (NN_*.yml, e.g. the registry setup in lab 06). The shared runner stays
+# generic; each lab drops in its own numbered playbooks, executed in order.
+shopt -s nullglob
+for pb in [0-9][0-9]_*.yml; do
+  run_step "${pb%%_*}" "$PWD/$pb" "Lab-specific step: $pb"
+done
+shopt -u nullglob
+
 SERVER_IP=$(awk '/^rke2-server1/ { for (i=1;i<=NF;i++) if ($i ~ /^ansible_host=/) print substr($i, index($i, "=")+1) }' inventory.ini)
 
 {

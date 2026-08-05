@@ -133,7 +133,7 @@
           selectattr('type', 'equalto', 'Ready') |
           selectattr('status', 'equalto', 'True') |
           list | length > 0
-      retries: 30
+      retries: 60
       delay: 5
       when: is_primary
 

@@ -1,0 +1,143 @@
+---
+# Lab 06 — Private registry / pull-through mirror for RKE2.
+#
+# 1. Runs a local `registry:2` container on the LXD host, configured as a
+#    pull-through cache of docker.io (Docker's official registry-mirror mode).
+#    It uses host networking, so every RKE2 VM reaches it at
+#    http://<lxd-gateway>:5000 without any cross-bridge NAT.
+# 2. Pushes /etc/rancher/rke2/registries.yaml to every node so containerd
+#    resolves docker.io through the local mirror, then restarts RKE2.
+# 3. Verifies the mirror actually serves a pull: schedules a Pod whose image
+#    comes from docker.io and asserts the repo lands in the mirror catalog.
+
+- name: Deploy the local pull-through registry mirror on the LXD host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run the registry:2 pull-through cache container
+      community.docker.docker_container:
+        name: "{{ registry_container_name }}"
+        image: registry:2
+        state: started
+        restart_policy: unless-stopped
+        network_mode: host
+        env:
+          REGISTRY_PROXY_REMOTEURL: "https://registry-1.docker.io"
+          REGISTRY_HTTP_ADDR: "0.0.0.0:{{ registry_mirror_port }}"
+
+    - name: Wait for the registry API to answer
+      ansible.builtin.uri:
+        url: "http://{{ registry_mirror_host }}:{{ registry_mirror_port }}/v2/"
+        status_code: 200
+      register: reg_ping
+      retries: 15
+      delay: 2
+      until: reg_ping.status == 200
+      changed_when: false
+
+- name: Configure RKE2 nodes to use the private registry mirror
+  hosts: rke2_cluster
+  gather_facts: false
+  tasks:
+    - name: Ensure the /etc/rancher/rke2 directory exists
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: "0755"
+
+    - name: Write /etc/rancher/rke2/registries.yaml
+      ansible.builtin.template:
+        src: templates/registries.yaml.j2
+        dest: /etc/rancher/rke2/registries.yaml
+        mode: "0640"
+      notify: Restart RKE2
+
+  handlers:
+    # RKE2 reads registries.yaml only at containerd (re)start, so a config
+    # change without a restart is a silent divergence — always notify a restart.
+    - name: Restart RKE2
+      ansible.builtin.systemd:
+        name: "{{ 'rke2-server' if inventory_hostname in groups['rke2_servers'] else 'rke2-agent' }}"
+        state: restarted
+
+- name: Verify image pulls flow through the private registry mirror
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    primary_server: "{{ groups['rke2_servers'][0] }}"
+    test_image: "docker.io/library/busybox:1.36"
+    test_pod_namespace: default
+    test_pod_name: registry-mirror-probe
+  tasks:
+    - name: Wait for the Kubernetes API to answer after the RKE2 restart
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[primary_server].ansible_host }}"
+        port: 6443
+        delay: 3
+        timeout: 180
+
+    - name: Wait for the primary server node to report Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ primary_server }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: srv_node
+      retries: 30
+      delay: 5
+      until: >
+        srv_node.resources | default([]) | length > 0 and
+        srv_node.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Ready') |
+          selectattr('status', 'equalto', 'True') | list | length > 0
+
+    - name: Schedule a probe Pod whose image is served through the mirror
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "{{ test_pod_name }}"
+            namespace: "{{ test_pod_namespace }}"
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: probe
+                image: "{{ test_image }}"
+                command: ["sleep", "3600"]
+
+    - name: Wait for the probe Pod to be Running (image pulled successfully)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        name: "{{ test_pod_name }}"
+        namespace: "{{ test_pod_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: probe_pod
+      retries: 30
+      delay: 5
+      until: >
+        probe_pod.resources | default([]) | length > 0 and
+        (probe_pod.resources[0].status.phase | default('')) == 'Running'
+
+    - name: Read the mirror catalog to confirm it cached the pulled image
+      ansible.builtin.uri:
+        url: "http://{{ registry_mirror_host }}:{{ registry_mirror_port }}/v2/_catalog"
+        return_content: true
+      register: reg_catalog
+      changed_when: false
+
+    - name: Assert the busybox repository was served by the mirror
+      ansible.builtin.assert:
+        that:
+          - "'library/busybox' in ((reg_catalog.content | from_json).repositories | default([]))"
+        fail_msg: >
+          The registry mirror did not cache library/busybox; the image pull did
+          not go through the local mirror.
+        success_msg: >
+          Confirmed: containerd pulled busybox through the local registry mirror.

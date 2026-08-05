@@ -75,8 +75,7 @@
           selectattr('type', 'equalto', 'Ready') |
           selectattr('status', 'equalto', 'True') |
           list | length > 0
-      retries: 30
-      delay: 5
+      retries: 60
       loop: "{{ groups['rke2_workers'] }}"
 
     # The kubelet REFUSES node-role.kubernetes.io/* labels passed via its own
