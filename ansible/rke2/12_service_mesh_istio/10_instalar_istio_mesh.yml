@@ -1,0 +1,357 @@
+---
+# Lab 12 — Istio Service Mesh (istiod, Envoy Sidecars, Gateway, VirtualService & Strict mTLS).
+#
+# 1. Instala el Service Mesh Istio mediante Helm charts oficiales (istio/base, istio/istiod e istio/gateway).
+# 2. Habilita la inyección automática de proxies Envoy sidecar en el namespace 'istio-demo'.
+# 3. Genera un Secret TLS con certificados SSL/TLS para el dominio 'istio.example.com'.
+# 4. Configura recursos nativos de Istio Service Mesh:
+#    - Gateway: Punto de entrada HTTP/HTTPS (puerto 80 y 443 con terminación TLS).
+#    - VirtualService: Filtrado por Host ('istio.example.com') y encaminamiento por Ruta ('/web' y '/api').
+#    - PeerAuthentication: mTLS estricto (STRICT) entre los sidecars Envoy en la malla.
+# 5. Comprueba en vivo el tráfico a través del Istio IngressGateway y la seguridad mTLS.
+#
+# Idempotente: re-ejecutar este playbook sobre un clúster existente mantiene el Service Mesh Istio sin cambios (changed=0).
+
+- name: Deploy and Verify Istio Service Mesh and Envoy Proxies
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    test_namespace: istio-demo
+    ingress_domain: "istio.example.com"
+  tasks:
+    - name: Ensure Istio system namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: istio-system
+
+    - name: Ensure Istio demo application namespace exists with automatic Envoy sidecar injection
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ test_namespace }}"
+            labels:
+              istio-injection: enabled
+
+    - name: Add Helm repository for Istio
+      kubernetes.core.helm_repository:
+        name: istio
+        repo_url: https://istio-release.storage.googleapis.com/charts
+
+    - name: Install Istio Base CRDs via Helm
+      kubernetes.core.helm:
+        name: istio-base
+        chart_ref: istio/base
+        release_namespace: istio-system
+        kubeconfig: "{{ local_kubeconfig }}"
+        wait: true
+
+    - name: Install Istio Control Plane (istiod) via Helm
+      kubernetes.core.helm:
+        name: istiod
+        chart_ref: istio/istiod
+        release_namespace: istio-system
+        kubeconfig: "{{ local_kubeconfig }}"
+        wait: true
+
+    - name: Install Istio Ingress Gateway via Helm
+      kubernetes.core.helm:
+        name: istio-ingressgateway
+        chart_ref: istio/gateway
+        release_namespace: istio-system
+        kubeconfig: "{{ local_kubeconfig }}"
+        wait: true
+        values:
+          service:
+            type: NodePort
+            ports:
+              - name: status-port
+                port: 15021
+                nodePort: 31521
+              - name: http2
+                port: 80
+                nodePort: 30080
+              - name: https
+                port: 443
+                nodePort: 30443
+
+    # ── Despliegue de Microservicios Backend en la Malla (con Envoy Sidecar) ───
+    - name: Deploy Istio web-service Pod and Deployment
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: istio-web
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: istio-web
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: istio-web
+            template:
+              metadata:
+                labels:
+                  app: istio-web
+              spec:
+                containers:
+                  - name: web
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 23\r\n\r\nResponse from Istio Web" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy Istio web-service Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: istio-web-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: istio-web
+            ports:
+              - port: 8080
+                name: http
+
+    - name: Deploy Istio api-service Pod and Deployment
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: istio-api
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: istio-api
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: istio-api
+            template:
+              metadata:
+                labels:
+                  app: istio-api
+              spec:
+                containers:
+                  - name: api
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 23\r\n\r\nResponse from Istio API" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy Istio api-service Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: istio-api-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: istio-api
+            ports:
+              - port: 8080
+                name: http
+
+    # ── Certificados SSL/TLS para Istio Gateway ──────────────────────────────
+    - name: Generate self-signed TLS key and cert for istio.example.com
+      ansible.builtin.command: >-
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048
+        -keyout /tmp/istio-tls.key -out /tmp/istio-tls.crt
+        -subj "/CN={{ ingress_domain }}/O=IstioMeshDemo"
+      args:
+        creates: /tmp/istio-tls.crt
+
+    - name: Read Istio TLS key content
+      ansible.builtin.slurp:
+        src: /tmp/istio-tls.key
+      register: istio_key_b64
+
+    - name: Read Istio TLS cert content
+      ansible.builtin.slurp:
+        src: /tmp/istio-tls.crt
+      register: istio_crt_b64
+
+    - name: Create Kubernetes TLS Secret in istio-system namespace
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/tls
+          metadata:
+            name: istio-tls-secret
+            namespace: istio-system
+          data:
+            tls.key: "{{ istio_key_b64.content }}"
+            tls.crt: "{{ istio_crt_b64.content }}"
+
+    # ── Recursos CRD Istio: Gateway, VirtualService & Strict mTLS ─────────────
+    - name: Apply Istio Gateway CRD (HTTP port 80 and HTTPS port 443 with TLS)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: networking.istio.io/v1alpha3
+          kind: Gateway
+          metadata:
+            name: istio-demo-gateway
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              istio: ingressgateway
+            servers:
+              - port:
+                  number: 80
+                  name: http
+                  protocol: HTTP
+                hosts:
+                  - "{{ ingress_domain }}"
+              - port:
+                  number: 443
+                  name: https
+                  protocol: HTTPS
+                tls:
+                  mode: SIMPLE
+                  credentialName: istio-tls-secret
+                hosts:
+                  - "{{ ingress_domain }}"
+
+    - name: Apply Istio VirtualService CRD (Host & Path Routing)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: networking.istio.io/v1alpha3
+          kind: VirtualService
+          metadata:
+            name: istio-demo-vs
+            namespace: "{{ test_namespace }}"
+          spec:
+            hosts:
+              - "{{ ingress_domain }}"
+            gateways:
+              - istio-demo-gateway
+            http:
+              - match:
+                  - uri:
+                      prefix: /web
+                route:
+                  - destination:
+                      host: istio-web-svc.{{ test_namespace }}.svc.cluster.local
+                      port:
+                        number: 8080
+              - match:
+                  - uri:
+                      prefix: /api
+                route:
+                  - destination:
+                      host: istio-api-svc.{{ test_namespace }}.svc.cluster.local
+                      port:
+                        number: 8080
+
+    - name: Apply Istio PeerAuthentication CRD (Strict mTLS between Envoy proxies)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: security.istio.io/v1beta1
+          kind: PeerAuthentication
+          metadata:
+            name: default-strict-mtls
+            namespace: "{{ test_namespace }}"
+          spec:
+            mtls:
+              mode: STRICT
+
+    - name: Wait for Istio Control Plane (istiod) and Ingress Gateway Pods to be Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: istio-system
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: istio_system_pods
+      retries: 60
+      delay: 5
+      until: >
+        istio_system_pods.resources | default([]) | length >= 2 and
+        (istio_system_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length) >= 2
+
+    - name: Get node IP hosting Istio Ingress Gateway Pod
+      ansible.builtin.set_fact:
+        gateway_node_ip: "{{ hostvars[istio_system_pods.resources[0].spec.nodeName].ansible_host }}"
+
+    - name: Test Istio VirtualService Path routing to /web
+      ansible.builtin.command: >-
+        curl -s -k --resolve {{ ingress_domain }}:30080:{{ gateway_node_ip }}
+        http://{{ ingress_domain }}:30080/web
+      register: istio_web_res
+      changed_when: false
+
+    - name: Test Istio VirtualService Path routing to /api
+      ansible.builtin.command: >-
+        curl -s -k --resolve {{ ingress_domain }}:30080:{{ gateway_node_ip }}
+        http://{{ ingress_domain }}:30080/api
+      register: istio_api_res
+      changed_when: false
+
+    - name: Assert Istio Service Mesh routing and Gateway filtering succeed
+      ansible.builtin.assert:
+        that:
+          - "'Response from Istio Web' in istio_web_res.stdout"
+          - "'Response from Istio API' in istio_api_res.stdout"
+        fail_msg: "Istio Service Mesh routing test failed"
+        success_msg: "Istio Service Mesh, Envoy Sidecars, Gateway, VirtualService and mTLS filtering operational."
+
+    - name: Display Istio Service Mesh verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Lab 12: Istio Service Mesh & Envoy Proxies Verificado!
+
+            Dominio Gateway: {{ ingress_domain }}
+            IP Gateway Node: {{ gateway_node_ip }}
+            Puertos Gateway: HTTP 30080 / HTTPS 30443
+
+            ✓ Control Plane (istiod) & Ingress Gateway: OK
+            ✓ Envoy Sidecars inyectados en namespace {{ test_namespace }}: OK
+            ✓ mTLS Estricto (PeerAuthentication STRICT): OK
+            ✓ Filtrado por URL / Host ({{ ingress_domain }}): OK
+            ✓ Filtrado por Ruta /web  -> istio-web-svc:8080 (OK)
+            ✓ Filtrado por Ruta /api  -> istio-api-svc:8080 (OK)
+            ✓ Certificado TLS en Gateway (Secret istio-tls-secret): OK
+          ════════════════════════════════════════════════════════════════

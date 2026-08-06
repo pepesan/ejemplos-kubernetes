@@ -28,14 +28,21 @@
 
     - name: Wait for the registry API to answer
       ansible.builtin.uri:
-        url: "http://{{ registry_mirror_host }}:{{ registry_mirror_port }}/v2/"
-        status_code: 200
+        url: "{{ 'https' if (registry_use_tls | default(false)) else 'http' }}://{{ registry_mirror_host }}:{{ registry_mirror_port }}/v2/"
+        status_code: [200, 401]
+        validate_certs: false
       register: reg_ping
       retries: 15
       delay: 2
-      until: reg_ping.status == 200
+      until: reg_ping.status in [200, 401]
       changed_when: false
-
+    - name: Push registry CA certificate to node when TLS is enabled
+      ansible.builtin.copy:
+        src: /tmp/registry-ca.crt
+        dest: /etc/rancher/rke2/registry-ca.crt
+        mode: "0644"
+      when: registry_use_tls | default(false)
+      notify: Restart RKE2
 - name: Configure RKE2 nodes to use the private registry mirror
   hosts: rke2_cluster
   gather_facts: false
@@ -127,11 +134,13 @@
 
     - name: Read the mirror catalog to confirm it cached the pulled image
       ansible.builtin.uri:
-        url: "http://{{ registry_mirror_host }}:{{ registry_mirror_port }}/v2/_catalog"
+        url: "{{ 'https' if (registry_use_tls | default(false)) else 'http' }}://{{ registry_mirror_host }}:{{ registry_mirror_port }}/v2/_catalog"
         return_content: true
+        validate_certs: false
+        url_username: "{{ registry_auth_user if (registry_auth | default(false)) else omit }}"
+        url_password: "{{ registry_auth_password if (registry_auth | default(false)) else omit }}"
       register: reg_catalog
       changed_when: false
-
     - name: Assert the busybox repository was served by the mirror
       ansible.builtin.assert:
         that:

@@ -1,0 +1,211 @@
+---
+# Lab 15 — Cilium Native L2 LoadBalancer & IPAM Pool.
+#
+# 1. Habilita L2 Announcements en Cilium CNI mediante RKE2 HelmChartConfig (l2announcements.enabled: true).
+# 2. Reinicia el DaemonSet de Cilium si la configuración ha cambiado para inicializar la pila eBPF L2.
+# 3. Configura los recursos CRD nativos de Cilium para asignación eBPF L2 de LoadBalancer:
+#    - CiliumLoadBalancerIPPool: Rango IP dedicado ('10.207.154.220/29', IPs 10.207.154.220-227).
+#    - CiliumL2AnnouncementPolicy: Anuncio L2/ARP gestionado directamente por eBPF en los nodos.
+# 4. Despliega un servicio de aplicación web con Service de tipo 'LoadBalancer'.
+# 5. Espera a que el IPAM de Cilium asigne una IP del pool a la propiedad EXTERNAL-IP del Service.
+# 6. Comprueba en vivo desde localhost que el servicio es accesible a través de la IP del LoadBalancer de Cilium.
+#
+# Idempotente: re-ejecutar este playbook sobre un clúster existente mantiene los recursos Cilium sin cambios (changed=0).
+
+- name: Deploy and Verify Cilium Native L2 LoadBalancer
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    test_namespace: cilium-lb-demo
+    lb_cidr_block: "10.207.154.220/29"
+  tasks:
+    - name: Ensure demo application namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ test_namespace }}"
+
+    - name: Enable L2 Announcements in Cilium CNI via RKE2 HelmChartConfig
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: helm.cattle.io/v1
+          kind: HelmChartConfig
+          metadata:
+            name: rke2-cilium
+            namespace: kube-system
+          spec:
+            valuesContent: |-
+              l2announcements:
+                enabled: true
+              devices:
+                - enp5s0
+      register: cilium_chart_config
+
+    - name: Restart Cilium DaemonSet if HelmChartConfig changed
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ local_kubeconfig }}
+        rollout restart ds/cilium -n kube-system
+      when: cilium_chart_config.changed
+
+    - name: Wait for Cilium DaemonSet rollout to complete
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ local_kubeconfig }}
+        rollout status ds/cilium -n kube-system --timeout=120s
+      changed_when: false
+      when: cilium_chart_config.changed
+
+    - name: Verify Cilium DaemonSet is active in kube-system
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: cilium
+        namespace: kube-system
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: cilium_ds
+      retries: 30
+      delay: 5
+      until: >
+        cilium_ds.resources | default([]) | length > 0 and
+        (cilium_ds.resources[0].status.numberReady | default(0)) > 0
+
+    # ── Configuración CRDs Cilium Native L2 LoadBalancer ────────────────────
+    - name: Apply CiliumLoadBalancerIPPool CRD
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: cilium.io/v2
+          kind: CiliumLoadBalancerIPPool
+          metadata:
+            name: lxdbr0-cilium-pool
+            namespace: kube-system
+          spec:
+            blocks:
+              - cidr: "{{ lb_cidr_block }}"
+
+    - name: Apply CiliumL2AnnouncementPolicy CRD
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: cilium.io/v2alpha1
+          kind: CiliumL2AnnouncementPolicy
+          metadata:
+            name: l2-announcement-policy
+            namespace: kube-system
+          spec:
+            loadBalancerIPs: true
+            externalIPs: true
+            interfaces:
+              - enp5s0
+
+    # ── Despliegue de Servicio type: LoadBalancer ────────────────────────────
+    - name: Deploy web application Pod and Deployment
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cilium-lb-web-app
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: cilium-lb-web
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: cilium-lb-web
+            template:
+              metadata:
+                labels:
+                  app: cilium-lb-web
+              spec:
+                containers:
+                  - name: web
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 48\r\n\r\nResponse from Cilium eBPF Managed LoadBalancer!" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy Kubernetes Service of type LoadBalancer
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cilium-lb-web-service
+            namespace: "{{ test_namespace }}"
+          spec:
+            type: LoadBalancer
+            selector:
+              app: cilium-lb-web
+            ports:
+              - port: 80
+                targetPort: 8080
+
+    - name: Wait for Cilium IPAM to assign EXTERNAL-IP to the Service
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: cilium-lb-web-service
+        namespace: "{{ test_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: cilium_svc_info
+      retries: 60
+      delay: 5
+      until: >
+        cilium_svc_info.resources is defined and
+        cilium_svc_info.resources | length > 0 and
+        cilium_svc_info.resources[0].status.loadBalancer.ingress is defined and
+        cilium_svc_info.resources[0].status.loadBalancer.ingress | length > 0 and
+        cilium_svc_info.resources[0].status.loadBalancer.ingress[0].ip is defined
+
+    - name: Extract assigned LoadBalancer IP address
+      ansible.builtin.set_fact:
+        assigned_lb_ip: "{{ cilium_svc_info.resources[0].status.loadBalancer.ingress[0].ip }}"
+
+    - name: Test HTTP reachability directly to the assigned Cilium LoadBalancer IP from localhost
+      ansible.builtin.command: >-
+        curl -s -w "\nHTTP_STATUS:%{http_code}" http://{{ assigned_lb_ip }}:80
+      register: lb_curl_res
+      changed_when: false
+
+    - name: Assert Cilium LoadBalancer IP is accessible and returns expected response
+      ansible.builtin.assert:
+        that:
+          - "'Response from Cilium eBPF Managed LoadBalancer!' in lb_curl_res.stdout"
+          - "'HTTP_STATUS:200' in lb_curl_res.stdout"
+        fail_msg: "Cilium LoadBalancer accessibility test failed for IP {{ assigned_lb_ip }}"
+        success_msg: "Cilium LoadBalancer IP {{ assigned_lb_ip }} is fully accessible and operational."
+
+    - name: Display Cilium LoadBalancer verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Lab 15: Cilium Native L2 LoadBalancer (eBPF) Verificado!
+
+            Cilium IPAM Pool CIDR: {{ lb_cidr_block }}
+            LoadBalancer EXTERNAL-IP: {{ assigned_lb_ip }}
+
+            ✓ Cilium CNI & HelmChartConfig (l2announcements=true): OK
+            ✓ CiliumLoadBalancerIPPool & CiliumL2AnnouncementPolicy CRDs: OK
+            ✓ Asignación eBPF de IP en Service type LoadBalancer: {{ assigned_lb_ip }}
+            ✓ Prueba de acceso HTTP directo a http://{{ assigned_lb_ip }}:80: OK (200 OK)
+          ════════════════════════════════════════════════════════════════

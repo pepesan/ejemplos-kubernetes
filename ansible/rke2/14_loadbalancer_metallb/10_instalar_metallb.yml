@@ -1,0 +1,199 @@
+---
+# Lab 14 — MetalLB LoadBalancer in Layer 2 (ARP) Mode.
+#
+# 1. Instala MetalLB mediante el Helm chart oficial (metallb/metallb) en el namespace 'metallb-system'.
+# 2. Configura los recursos CRD de MetalLB en modo Layer 2 (ARP):
+#    - IPAddressPool: Rango IP del puente LXD ('10.207.154.200-10.207.154.210').
+#    - L2Advertisement: Anuncio ARP L2 de las IPs del pool a la red local lxdbr0.
+# 3. Despliega un servicio de aplicación web con Service de tipo 'LoadBalancer'.
+# 4. Espera a que MetalLB asigne una IP externa pública del rango reservado al Service (EXTERNAL-IP).
+# 5. Comprueba en vivo desde localhost que el servicio es accesible a través de la IP del LoadBalancer.
+#
+# Idempotente: re-ejecutar este playbook sobre un clúster existente mantiene el despliegue MetalLB sin cambios (changed=0).
+
+- name: Deploy and Verify MetalLB Managed LoadBalancer
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    test_namespace: metallb-demo
+    lb_ip_range: "10.207.154.200-10.207.154.210"
+  tasks:
+    - name: Ensure MetalLB system namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: metallb-system
+
+    - name: Ensure demo application namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ test_namespace }}"
+
+    - name: Add Helm repository for MetalLB
+      kubernetes.core.helm_repository:
+        name: metallb
+        repo_url: https://metallb.github.io/metallb
+
+    - name: Install MetalLB via Helm
+      kubernetes.core.helm:
+        name: metallb
+        chart_ref: metallb/metallb
+        release_namespace: metallb-system
+        kubeconfig: "{{ local_kubeconfig }}"
+        wait: true
+
+    - name: Wait for MetalLB Controller and Speaker Pods to reach Running state
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: metallb-system
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: metallb_pods
+      retries: 60
+      delay: 5
+      until: >
+        metallb_pods.resources | default([]) | length >= 2 and
+        (metallb_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length) >= 2
+
+    # ── Configuración CRDs MetalLB Layer 2 ──────────────────────────────────
+    - name: Apply MetalLB IPAddressPool CRD
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: metallb.io/v1beta1
+          kind: IPAddressPool
+          metadata:
+            name: lxdbr0-pool
+            namespace: metallb-system
+          spec:
+            addresses:
+              - "{{ lb_ip_range }}"
+
+    - name: Apply MetalLB L2Advertisement CRD
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: metallb.io/v1beta1
+          kind: L2Advertisement
+          metadata:
+            name: l2-advertisement
+            namespace: metallb-system
+          spec:
+            ipAddressPools:
+              - lxdbr0-pool
+
+    # ── Despliegue de Servicio type: LoadBalancer ────────────────────────────
+    - name: Deploy web application Pod and Deployment
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: metallb-web-app
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: metallb-web
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: metallb-web
+            template:
+              metadata:
+                labels:
+                  app: metallb-web
+              spec:
+                containers:
+                  - name: web
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 43\r\n\r\nResponse from MetalLB Managed LoadBalancer!" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy Kubernetes Service of type LoadBalancer
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: metallb-web-service
+            namespace: "{{ test_namespace }}"
+          spec:
+            type: LoadBalancer
+            selector:
+              app: metallb-web
+            ports:
+              - port: 80
+                targetPort: 8080
+
+    - name: Wait for MetalLB to assign EXTERNAL-IP to the Service
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: metallb-web-service
+        namespace: "{{ test_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: metallb_svc_info
+      retries: 60
+      delay: 5
+      until: >
+        metallb_svc_info.resources is defined and
+        metallb_svc_info.resources | length > 0 and
+        metallb_svc_info.resources[0].status.loadBalancer.ingress is defined and
+        metallb_svc_info.resources[0].status.loadBalancer.ingress | length > 0 and
+        metallb_svc_info.resources[0].status.loadBalancer.ingress[0].ip is defined
+
+    - name: Extract assigned LoadBalancer IP address
+      ansible.builtin.set_fact:
+        assigned_lb_ip: "{{ metallb_svc_info.resources[0].status.loadBalancer.ingress[0].ip }}"
+
+    - name: Test HTTP reachability directly to the assigned LoadBalancer IP from localhost
+      ansible.builtin.command: >-
+        curl -s -w "\nHTTP_STATUS:%{http_code}" http://{{ assigned_lb_ip }}:80
+      register: lb_curl_res
+      changed_when: false
+
+    - name: Assert LoadBalancer IP is accessible and returns expected response
+      ansible.builtin.assert:
+        that:
+          - "'Response from MetalLB Managed LoadBalancer!' in lb_curl_res.stdout"
+          - "'HTTP_STATUS:200' in lb_curl_res.stdout"
+        fail_msg: "MetalLB LoadBalancer accessibility test failed for IP {{ assigned_lb_ip }}"
+        success_msg: "MetalLB LoadBalancer IP {{ assigned_lb_ip }} is fully accessible and operational."
+
+    - name: Display MetalLB verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Lab 14: MetalLB Managed LoadBalancer (L2 Mode) Verificado!
+
+            IP Pool Asignado: {{ lb_ip_range }}
+            LoadBalancer EXTERNAL-IP: {{ assigned_lb_ip }}
+
+            ✓ MetalLB Controller & Speaker Pods: OK
+            ✓ IPAddressPool & L2Advertisement CRDs: OK
+            ✓ Asignación de IP en Service type LoadBalancer: {{ assigned_lb_ip }}
+            ✓ Prueba de acceso HTTP directo a http://{{ assigned_lb_ip }}:80: OK (200 OK)
+          ════════════════════════════════════════════════════════════════

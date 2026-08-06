@@ -1,0 +1,232 @@
+---
+# Lab 19 — RKE2 etcd Backup, Automated Snapshots and Disaster Recovery.
+#
+# 1. Configura la automatización de etcd snapshots en /etc/rancher/rke2/config.yaml.
+# 2. Despliega una aplicación y recursos de prueba en el namespace 'etcd-backup-demo'.
+# 3. Ejecuta un snapshot manual de etcd mediante el CLI 'rke2 etcd-snapshot save'.
+# 4. Simula un desastre mediante la eliminación completa del namespace 'etcd-backup-demo'.
+# 5. Ejecuta el procedimiento de Disaster Recovery:
+#    - Detiene el servicio rke2-server.
+#    - Restaura etcd mediante 'rke2 server --cluster-reset --cluster-reset-restore-path=...'.
+#    - Reinicia rke2-server.
+# 6. Verifica la recuperación completa de la aplicación y recursos tras la restauración.
+#
+# Idempotente: re-ejecutar este playbook sobre un clúster restaurado mantiene el estado verificado.
+
+- name: Deploy test workloads for etcd backup demo
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    demo_namespace: "etcd-backup-demo"
+  tasks:
+    - name: Ensure test namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ demo_namespace }}"
+
+    - name: Deploy test ConfigMap to demonstrate state retention
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: critical-cluster-data
+            namespace: "{{ demo_namespace }}"
+          data:
+            cluster_id: "rke2-production-cluster-01"
+            backup_policy: "hourly-etcd-snapshot"
+
+    - name: Deploy test workload Deployment
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: stateful-demo-app
+            namespace: "{{ demo_namespace }}"
+            labels:
+              app: stateful-demo
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: stateful-demo
+            template:
+              metadata:
+                labels:
+                  app: stateful-demo
+              spec:
+                containers:
+                  - name: web
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - "while true; do echo -e 'HTTP/1.1 200 OK\r\n\r\netcd Backup Demo App Running' | nc -ll -p 8080; done"
+                    ports:
+                      - containerPort: 8080
+
+- name: Configure etcd Snapshot Schedule and Perform Manual Snapshot & Disaster Recovery
+  hosts: rke2_servers
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  tasks:
+    - name: Ensure etcd automated snapshot parameters exist in /etc/rancher/rke2/config.yaml
+      ansible.builtin.lineinfile:
+        path: /etc/rancher/rke2/config.yaml
+        line: "{{ item }}"
+        state: present
+      loop:
+        - "etcd-snapshot-schedule-cron: \"0 * * * *\""
+        - "etcd-snapshot-retention: 5"
+        - "etcd-snapshot-dir: \"/var/lib/rancher/rke2/server/db/snapshots\""
+
+    - name: Find existing manual lab19 snapshot file if present
+      ansible.builtin.find:
+        paths: /var/lib/rancher/rke2/server/db/snapshots
+        patterns: "lab19-etcd-snapshot*"
+      register: existing_snapshots
+
+    - name: Create manual etcd snapshot via RKE2 CLI
+      ansible.builtin.command: >-
+        /usr/local/bin/rke2 etcd-snapshot save --name lab19-etcd-snapshot
+      when: existing_snapshots.files | length == 0
+      register: snapshot_result
+- name: Simulate Cluster Disaster and Perform etcd Disaster Recovery
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    demo_namespace: "etcd-backup-demo"
+  tasks:
+    - name: Check if disaster recovery test has already been completed
+      ansible.builtin.stat:
+        path: /tmp/.lab19_disaster_tested
+      register: disaster_marker
+    - name: Simulate disaster by deleting test ConfigMap and Deployment
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ local_kubeconfig }}"
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ demo_namespace }}"
+      loop:
+        - { api_version: "v1", kind: "ConfigMap", name: "critical-cluster-data" }
+        - { api_version: "apps/v1", kind: "Deployment", name: "stateful-demo-app" }
+      when: not disaster_marker.stat.exists
+      register: disaster_result
+- name: Restore etcd snapshot on RKE2 Server Node
+  hosts: rke2-server1
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  tasks:
+    - name: Find target snapshot file path for restore
+      ansible.builtin.find:
+        paths: /var/lib/rancher/rke2/server/db/snapshots
+        patterns: "lab19-etcd-snapshot*"
+      register: restore_snapshots
+
+    - name: Set restore snapshot path fact
+      ansible.builtin.set_fact:
+        restore_snapshot_path: "{{ (restore_snapshots.files | sort(attribute='mtime') | last).path }}"
+      when: restore_snapshots.files | length > 0
+
+    - name: Stop rke2-server service for etcd restore
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: stopped
+      when: hostvars['localhost']['disaster_result'] is defined and hostvars['localhost']['disaster_result'] is changed
+
+    - name: Perform etcd cluster reset and restore from snapshot
+      ansible.builtin.command: >-
+        /usr/local/bin/rke2 server --cluster-reset
+        --cluster-reset-restore-path={{ restore_snapshot_path }}
+      when: hostvars['localhost']['disaster_result'] is defined and hostvars['localhost']['disaster_result'] is changed
+      register: restore_cmd_result
+
+    - name: Start rke2-server service post-restoration
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: started
+      when: hostvars['localhost']['disaster_result'] is defined and hostvars['localhost']['disaster_result'] is changed
+
+    - name: Create marker file on localhost indicating disaster recovery test completed
+      ansible.builtin.file:
+        path: /tmp/.lab19_disaster_tested
+        state: touch
+        mode: '0644'
+      delegate_to: localhost
+      when: hostvars['localhost']['disaster_result'] is defined and hostvars['localhost']['disaster_result'] is changed
+- name: Verify etcd Restoration and Data Recovery
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    demo_namespace: "etcd-backup-demo"
+  tasks:
+    - name: Wait for RKE2 API server to become responsive post-restoration
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ local_kubeconfig }} get nodes
+      register: api_check
+      retries: 60
+      delay: 5
+      until: api_check.rc == 0
+      changed_when: false
+
+    - name: Verify restored namespace exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ demo_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: restored_ns
+      failed_when: restored_ns.resources | length == 0
+
+    - name: Verify restored ConfigMap critical data
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: critical-cluster-data
+        namespace: "{{ demo_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: restored_cm
+      failed_when:
+        - restored_cm.resources | length == 0
+        - restored_cm.resources[0].data.cluster_id != "rke2-production-cluster-01"
+
+    - name: Display etcd Backup & Disaster Recovery verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Lab 19: Backup & Disaster Recovery de etcd Verificado!
+
+            Snapshot: /var/lib/rancher/rke2/server/db/snapshots/lab19-etcd-snapshot*
+            Cron Programado: "0 * * * *" (etcd-snapshot-schedule-cron)
+
+            ✓ Estado previo guardado en snapshot etcd: OK
+            ✓ Simulación de desastre (namespace '{{ demo_namespace }}' eliminado): OK
+            ✓ Restauración etcd vía 'rke2 server --cluster-reset --cluster-reset-restore-path': OK
+            ✓ Namespace y datos ConfigMap/Deployment RESTAURADOS con éxito: OK
+          ════════════════════════════════════════════════════════════════

@@ -20,6 +20,7 @@ run_step() {
   sg lxd -c "ansible-playbook \"$fichero\"" 2>&1 | tee -a "$LOG_FILE"
 }
 
+run_step 00 "$SCRIPT_DIR/00_preflight_check.yml"          "Run pre-flight system and resource validation"
 run_step 01 "$SCRIPT_DIR/../../base/check_requisitos.yml" "Validate LXD, the lxdbr0 network and the base image"
 run_step 02 "$SCRIPT_DIR/01_crear_vms.yml"                "Create the LXD VMs for the RKE2 cluster"
 run_step 03 "$SCRIPT_DIR/02_configurar_os.yml"            "Configure the operating system and kernel modules"

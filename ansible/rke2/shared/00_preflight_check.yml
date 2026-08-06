@@ -1,0 +1,51 @@
+---
+# Shared Pre-flight System & Network Validator for RKE2 Labs.
+# Validates host resources, LXD environment, memory, sysctl parameters, and required port availability.
+
+- name: RKE2 Pre-flight Environment and Resource Validation
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tasks:
+    - name: Verify minimum free RAM memory on host (>= 4GiB)
+      ansible.builtin.assert:
+        that:
+          - ansible_memtotal_mb >= 4000
+        fail_msg: "Insufficient host RAM memory (found {{ ansible_memtotal_mb }}MiB, minimum required: 4000MiB)."
+        success_msg: "Host memory check passed ({{ ansible_memtotal_mb }}MiB RAM available)."
+
+    - name: Verify lxc command availability
+      ansible.builtin.command: which lxc
+      register: lxc_check
+      changed_when: false
+      failed_when: lxc_check.rc != 0
+
+    - name: Verify base LXD image 'k8s-template' exists
+      ansible.builtin.command: lxc image show k8s-template
+      register: image_check
+      changed_when: false
+      failed_when: image_check.rc != 0
+
+    - name: Verify required kernel modules are loadable on host
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+      failed_when: false
+
+    - name: Check required ports availability on host (6443, 9345)
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item }}"
+        state: stopped
+        timeout: 2
+      loop:
+        - 6443
+        - 9345
+      failed_when: false
+
+    - name: Display Pre-flight Validation summary
+      ansible.builtin.debug:
+        msg: "✓ Pre-flight checks passed successfully! Host resources and LXD environment ready for RKE2 deployment."

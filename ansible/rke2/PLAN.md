@@ -64,7 +64,7 @@ Para evitar duplicar código entre los laboratorios, toda la lógica de infraest
 | --- | --- | --- | --- | --- |
 | **01** | **Requisitos: Hardware y Red** (`01_requisitos_hardware_red`) | ✅ Validado | `v1.36.3+rke2r1` | Documentación completa de vCPU/RAM/disco, sysctl y matriz de puertos (`6443`, `9345`, `2379-2380`, `8472`). |
 | **02** | **Server Node Mono-nodo** (`02_rke2_server_single_node`) | ✅ Validado en Vivo | `v1.35.6+rke2r1` | VM LXD `rke2-server1` aprovisionada, `rke2-server.service` en ejecución, `kubeconfig.yaml` local ajustado y verificado en vivo. |
-| **03** | **Configuración de CNI** (`03_cni_configuration`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Probado en vivo con CNI **Cilium** (`cni: cilium`), pod `cilium-operator` y agentes `cilium` en estado `Running`. Replanificado para incluir matriz completa del temario CNI (Canal, Flannel, Calico, Cilium, Weave). |
+| **03** | **Configuración de CNI** (`03_cni_configuration`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Matriz completa de 4 CNI probados individualmente en vivo (`canal`, `flannel`, `cilium`, `calico`). Ver plan y resultados en [`03_cni_configuration/MATRIX.md`](03_cni_configuration/MATRIX.md) (2026-08-06). |
 | **04** | **Worker Node (Agent)** (`04_worker_node_agent`) | ✅ Validado en Vivo | `v1.35.6+rke2r1` | Probado en vivo con 1 Server + 2 Workers (`rke2-worker1/2`), registro en puerto `9345` y etiquetado `worker` (2026-08-04). |
 | **05** | **Alta Disponibilidad (HA)** (`05_ha_cluster_etcd`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | 3 Servers (etcd distribuido) + 3 Workers (`rke2-worker1/2/3`). VIP kube-vip `10.207.154.60` (v1.2.2, ARP, `enp5s0`). Workers etiquetados `worker` via `kubernetes.core.k8s`. 2 ejecuciones consecutivas idempotentes (2026-08-05). |
 | **06** | **Docker Registry Privado** (`06_docker_private_registry`) | ✅ Validado en Vivo | `v1.35.6+rke2r1` | Registry `registry:2` como pull-through cache de `docker.io` en `host` networking, `registries.yaml.j2` desplegado a todos los nodos con handler de reinicio. Pod `busybox:1.36` verificado Running + mirror catalog confirma `library/busybox` cacheado. 2 ejecuciones idempotentes (`changed=0`, 2026-08-05). |
@@ -72,7 +72,15 @@ Para evitar duplicar código entre los laboratorios, toda la lógica de infraest
 | **08** | **Almacenamiento Avanzado & Longhorn** (`08_longhorn_storage`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Módulo completo de Almacenamiento Avanzado (Temario 5 y 6): **PV**, **PVC**, **StorageClasses**, modos de acceso **RWO** y **ReadWriteMany (RWX)** multi-nodo (`rke2-worker1/2`), junto con Longhorn v1.12.0 (iSCSI, Helm, Online Expansion 1Gi->2Gi). 2 ejecuciones idempotentes (`changed=0`, 2026-08-05). |
 | **09** | **Panel de Control Web (Headlamp)** (`09_dashboard_headlamp`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Despliegue de Headlamp (CNCF Dashboard v0.44.0) via `kubernetes.core.helm`, NodePort 30090 (`http://10.207.154.60:30090`), RBAC `headlamp-admin`, generación de Secret token y guardado en `headlamp_token.txt`. 2 ejecuciones idempotentes (`changed=0`, 2026-08-05). |
 | **10** | **Monitorización y Logging** (`10_observabilidad_prometheus_grafana_loki`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Módulo completo de Monitorización y Logging (Temario 8): **kube-prometheus-stack** (Prometheus Operator, Grafana 30080, Prometheus 30090), **loki-stack** (Loki, Promtail/FluentBit), Loki Datasource registrado en Grafana y pod generador de logs JSON. 2 ejecuciones idempotentes (`changed=0`, 2026-08-05). |
-
+| **11** | **Ingress NGINX Controller** (`11_ingress_nginx`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Controlador NGINX Inc (`nginxinc/kubernetes-ingress` v1.31.3), Host (`nginx.example.com`), Ruta (`/web` y `/api`), Secret TLS en HTTPS (30443) y `externalTrafficPolicy: Cluster`. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
+| **12** | **Service Mesh Istio** (`12_service_mesh_istio`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Malla Istio (v1.20.2 Helm: `istiod`, `istio-ingressgateway`), Envoy sidecars inyectados automáticamente (`istio-injection: enabled`), `Gateway`, `VirtualService` (`/web` y `/api`) y `PeerAuthentication` mTLS estricto. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
+| **13** | **Ingress Traefik** (`13_ingress_traefik`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Traefik nativo RKE2 (`rke2-traefik`), CRDs `Middleware` (`strip-prefix`), `Ingress` (`ingressClassName: traefik`), Host (`traefik.example.com`), Ruta (`/web` y `/api`) y Secret TLS. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
+| **14** | **LoadBalancer MetalLB** (`14_loadbalancer_metallb`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | MetalLB v0.14.3 Helm en modo L2 (ARP), `IPAddressPool` (`10.207.154.200-210`), `L2Advertisement`, Service `type: LoadBalancer` asignado (`10.207.154.200`) y prueba HTTP directa. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
+| **15** | **LoadBalancer Cilium Native** (`15_loadbalancer_cilium`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Cilium CNI eBPF L2 LoadBalancer & IPAM (`l2announcements=true`), `CiliumLoadBalancerIPPool` (`10.207.154.220/29`), `CiliumL2AnnouncementPolicy`, Service `type: LoadBalancer` y prueba HTTP directa. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
+| **16** | **Gateway API Envoy** (`16_gateway_api_envoy`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Envoy Gateway v1.0.0 (`gateway.envoyproxy.io`), Gateway API v1.0, `GatewayClass` (`eg`), `Gateway` multi-protocolo, `HTTPRoute` (`/web`, `/api`), `TCPRoute` (L4), `UDPRoute` (L4) y Secret TLS. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
+| **17** | **Gateway API NGINX & MariaDB TCP** (`17_gateway_api_nginx`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | NGINX Gateway Fabric (`nginx-gateway-fabric`), MariaDB Operator (`mariadb-operator`), clúster MariaDB, `HTTPRoute` (`/web`, `/api`), `TCPRoute` L4 en puerto 3306 hacia el clúster MariaDB. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
+| **18** | **Gateway API Cilium eBPF & MariaDB TCP** (`18_gateway_api_cilium`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Cilium eBPF Gateway API (`gatewayAPI.enabled=true`), MariaDB Operator (`mariadb-operator`), clúster MariaDB, `GatewayClass` (`cilium`), `HTTPRoute` (`/web`, `/api`) y `TCPRoute` L4 MariaDB en puerto 3306. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
+| **19** | **Backup & Disaster Recovery de etcd** (`19_etcd_backup_restore`) | ✅ Validado en Vivo | `v1.36.3+rke2r1` | Snapshots automáticos programados en `config.yaml` (`0 * * * *`), snapshots manuales CLI (`rke2 etcd-snapshot save`), simulación de desastre y restauración completa vía `rke2 server --cluster-reset --cluster-reset-restore-path`. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06). |
 ---
 
 ## 📝 Resumen del Trabajo Realizado Hasta Ahora (2026-08-05)
@@ -107,7 +115,23 @@ Para evitar duplicar código entre los laboratorios, toda la lógica de infraest
 
 7. **Validación del Lab 10 (Monitorización y Logging / Prometheus, Grafana, Loki):**
    - Despliegue de `kube-prometheus-stack` (Grafana en 30080, Prometheus en 30090) y `loki-stack` (Loki + Promtail/FluentBit).
-   - ConfigMap de datasource Loki pre-registrado en Grafana + pod emisor de logs JSON (`log-producer-pod`). 2 pasadas idempotentes (`changed=0`).
+   - ConfigMap de datasource Loki pre-registrado en Grafana + pod emisor de logs JSON (`log-producer-pod`). 2 pasadas idempotentes (`changed=0`, 2026-08-05).
+
+8. **Validación de Ingress Controllers (Lab 11 `11_ingress_nginx` y Lab 13 `13_ingress_traefik`):**
+   - **Lab 11**: Ingress NGINX Controller de NGINX Inc (`nginxinc/kubernetes-ingress` v1.31.3) con `externalTrafficPolicy: Cluster`, SSL/TLS Secret y filtrado por Host/Ruta (`/web` y `/api`). 2 pasadas idempotentes (`changed=0`, 2026-08-06).
+   - **Lab 13**: Traefik Ingress Controller nativo de RKE2 (`rke2-traefik`), CRDs `Middleware` (`strip-prefix`), Ingress TLS y filtrado Host/Path. 2 pasadas idempotentes (`changed=0`, 2026-08-06).
+
+9. **Validación del Lab 12 (Service Mesh con Istio & Envoy Proxies):**
+   - Despliegue de `istiod` (Istio v1.20.2), `istio-ingressgateway`, inyección automática de sidecars Envoy en `istio-demo`, `Gateway`, `VirtualService` (`/web` y `/api`) y `PeerAuthentication` mTLS estricto (`STRICT`). 2 pasadas idempotentes (`changed=0`, 2026-08-06).
+
+10. **Validación de LoadBalancers Gestionados (Lab 14 `14_loadbalancer_metallb` y Lab 15 `15_loadbalancer_cilium`):**
+    - **Lab 14**: MetalLB v0.14.3 en modo Layer 2 (ARP), `IPAddressPool` (`10.207.154.200-210`), `L2Advertisement`, asignación dinámica de `EXTERNAL-IP` en Service `type: LoadBalancer` y prueba de acceso HTTP directo. 2 pasadas idempotentes (`changed=0`, 2026-08-06).
+    - **Lab 15**: Cilium CNI eBPF L2 LoadBalancer & IPAM (`l2announcements=true`), `CiliumLoadBalancerIPPool` (`10.207.154.220/29`), `CiliumL2AnnouncementPolicy`, Service `type: LoadBalancer` y prueba HTTP directa. 2 pasadas idempotentes (`changed=0`, 2026-08-06).
+
+11. **Implementación del Estándar Kubernetes Gateway API v1.0 (Labs 16, 17 y 18):**
+    - **Lab 16 (`16_gateway_api_envoy`)**: Envoy Gateway (`gateway.envoyproxy.io`), `GatewayClass` (`eg`), `Gateway` multi-protocolo, `HTTPRoute`, `TCPRoute` (L4), `UDPRoute` (L4) y terminación TLS.
+    - **Lab 17 (`17_gateway_api_nginx`)**: NGINX Gateway Fabric (`nginx-gateway-fabric`), **MariaDB Operator** (`mariadb-operator`), clúster MariaDB, `HTTPRoute` (`/web`, `/api`) y `TCPRoute` L4 en puerto 3306 hacia el clúster MariaDB.
+    - **Lab 18 (`18_gateway_api_cilium`)**: Cilium eBPF Gateway API (`gatewayAPI.enabled=true`), **MariaDB Operator**, clúster MariaDB, `GatewayClass` (`cilium`), `HTTPRoute` (`/web`, `/api`) y `TCPRoute` L4 MariaDB en puerto 3306.
 
 ---
 
@@ -119,26 +143,25 @@ Los 10 laboratorios principales del temario están **100% completados y validado
 
 Desglose de ejemplos prácticos paso a paso para cubrir los 4 proveedores CNI activos y los 3 pilares del networking K8s (IPAM, Dataplane VXLAN/BGP/eBPF y Controlplane NetworkPolicies L3/L4/L7):
 
-- [ ] **Ejemplo 1: Canal (Default RKE2)** — *VXLAN Overlay + NetworkPolicies K8s L3/L4*
+- [x] **Ejemplo 1: Canal (Default RKE2)** — *VXLAN Overlay + NetworkPolicies K8s L3/L4*
   - Despliegue `rke2_cni: canal`. Flannel (interfaz `flannel.1`, UDP 8472) + Calico Felix.
   - Playbook `10_cni_canal_networkpolicies.yml`: Pod `frontend` y Pod `backend` con `NetworkPolicy` L3/L4 permitiendo únicamente el puerto `8080`.
-- [ ] **Ejemplo 2: Flannel** — *Red Overlay Ultraligera sin Overhead de Seguridad*
-  - Despliegue `rke2_cni: flannel`. Red VXLAN directa sin motor de políticas.
-  - Verificación de tablas de ruta y demostración de que las `NetworkPolicies` son ignoradas por diseño.
-- [ ] **Ejemplo 3: Cilium (eBPF)** — *Aceleración eBPF, Reemplazo de kube-proxy y Seguridad L7*
-  - Despliegue `rke2_cni: cilium`. Sustitución de `iptables` por programas eBPF cargados en el kernel.
-  - Playbook `11_cni_cilium_ebpf.yml`: Verificación de `cilium status` y aplicación de `CiliumNetworkPolicy` L7 (permitir `GET /public`, denegar `POST /admin`).
-- [ ] **Ejemplo 4: Calico Avanzado** — *Personalización con `HelmChartConfig`*
-  - Personalización declarativa vía `/var/lib/rancher/rke2/server/manifests/rke2-calico-config.yaml` (`HelmChartConfig`).
-  - Ajuste de MTU, modo de encapsulamiento (`vxlanAlways` vs `Never`) y rangos IPAM.
-
+- [x] **Ejemplo 2: Flannel** — *Red Overlay Ultraligera sin Overhead de Seguridad*
+  - Despliegue `rke2_cni: flannel`. Red VXLAN directa en puerto UDP 8472 sin motor de políticas.
+  - Playbook `11_cni_flannel_overview.yml`: Verificación de tablas de ruta, subredes por nodo (podCIDR) e inspección del modelo sin motor de NetworkPolicies.
+- [x] **Ejemplo 3: Cilium (eBPF)** — *Aceleración eBPF, Reemplazo de kube-proxy y Seguridad L7*
+  - Despliegue `rke2_cni: cilium`. Sustitución de `iptables` por programas eBPF cargados en el kernel Linux.
+  - Playbook `12_cni_cilium_ebpf.yml`: Verificación del status de Cilium, socket maps eBPF y aplicación de políticas de seguridad.
+- [x] **Ejemplo 4: Calico Avanzado** — *Personalización con `HelmChartConfig`*
+  - Personalización declarativa vía CRD `HelmChartConfig` (`rke2-canal` / `rke2-calico`).
+  - Playbook `13_cni_calico_config.yml`: Ajuste de MTU (1450), métricas Prometheus de Felix y severidad de logs.
 ---
 
 ### 🚀 Nuevos Laboratorios Día 2 (Operaciones y Seguridad Avanzada)
 
-- [ ] **Lab 11: Backup & Disaster Recovery de etcd (`11_etcd_backup_restore`)**:
+- [x] **Lab 19: Backup & Disaster Recovery de etcd (`19_etcd_backup_restore`)**:
   - Snapshots manuales (`rke2 etcd-snapshot save`) y automatización programada en `config.yaml` (`etcd-snapshot-schedule-cron`).
-  - Procedimiento de Disaster Recovery: restauración de etcd tras fallo del clúster con `rke2 server --cluster-reset --cluster-reset-restore-path`.
+  - Procedimiento de Disaster Recovery: restauración de etcd tras fallo del clúster con `rke2 server --cluster-reset --cluster-reset-restore-path`. 2 ejecuciones idempotentes (`changed=0`, 2026-08-06).
 - [ ] **Lab 12: CIS Benchmark Hardening y Auditoría (`12_rke2_cis_hardening`)**:
   - Activación de perfiles CIS (`profile: cis-1.23` / `cis-1.6`) en `config.yaml` y Pod Security Admissions (PSA).
   - Auditoría automatizada de seguridad ejecutando el job de `kube-bench` para RKE2.
@@ -147,7 +170,7 @@ Desglose de ejemplos prácticos paso a paso para cubrir los 4 proveedores CNI ac
 
 ### 🛠️ Mejoras de Infraestructura y Ergonomía (QoL en `shared/`)
 
-- [ ] **Redundancia Supervisor 9345 (Lab 05)**: Exponer tanto el API (`6443`) como el Supervisor (`9345`) bajo la VIP `10.207.154.60` (HAProxy / VIP dual), eliminando el SPOF en el join de nodos.
+- [x] **Redundancia Supervisor 9345 (Lab 05)**: Exposición del API (`6443`) y del Supervisor (`9345`) bajo la VIP flotante `10.207.154.60` (`kube-vip` ARP), eliminando el SPOF en el join de nodos. Integración del playbook `10_verify_ha_supervisor_redundancy.yml` y validación idempotente (`changed=0`, 2026-08-06).
 - [ ] **Registry Empresarial TLS & Auth (Lab 06)**: Añadir variante con CA local (certificados autofirmados) y autenticación HTTP Basic (`ca_file` y `auth` en `registries.yaml`).
 - [ ] **Pre-flight Validator ejecutable (Lab 01)**: Crear `01_preflight_check.yml` ejecutable que verifique sysctls, módulos del kernel, memoria libre y puertos antes de arrancar los labs.
 - [ ] **QoL SSH Profile (`shared/`)**: Añadir en `/etc/profile.d/rke2.sh` el autocompletado bash para `kubectl` y `crictl`, el alias `alias k=kubectl` y la exportación automática del `KUBECONFIG`.

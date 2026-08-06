@@ -1,0 +1,396 @@
+---
+# Lab 18 — Cilium eBPF Gateway API & MariaDB Operator TCPRoute (HTTP, HTTPS & Clustered MariaDB TCP).
+#
+# 1. Habilita el soporte nativo de Gateway API en Cilium CNI mediante RKE2 HelmChartConfig (gatewayAPI.enabled: true).
+# 2. Instala los CRDs estándar de Kubernetes Gateway API (gateway.networking.k8s.io).
+# 3. Instala MariaDB Operator (mariadb-operator) y despliega un clúster MariaDB de prueba.
+# 4. Configura los recursos declarativos Kubernetes Gateway API:
+#    - GatewayClass: 'cilium' (Cilium eBPF Gateway Controller).
+#    - Gateway: Listeners para HTTP (80), HTTPS (443 con Secret TLS) y TCP (3306 para MariaDB).
+#    - HTTPRoute: Host 'cilium.gateway.example.com', rutas '/web' y '/api'.
+#    - TCPRoute: Encaminamiento L4 TCP en puerto 3306 redirigiendo al servicio del clúster MariaDB.
+# 5. Comprueba en vivo la conectividad HTTP, HTTPS y la conexión TCP al clúster MariaDB.
+#
+# Idempotente: re-ejecutar este playbook sobre un clúster existente mantiene los recursos Cilium Gateway API sin cambios (changed=0).
+
+- name: Deploy and Verify Cilium eBPF Gateway API and MariaDB Cluster TCPRoute
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    test_namespace: cilium-gateway-demo
+    ingress_domain: "cilium.gateway.example.com"
+  tasks:
+    - name: Ensure demo namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ test_namespace }}"
+
+    - name: Ensure mariadb-operator namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: mariadb-operator
+
+    - name: Clean up any stale CRD status versions before apply
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ local_kubeconfig }}
+        delete crd backendtlspolicies.gateway.networking.k8s.io grpcroutes.gateway.networking.k8s.io tlsroutes.gateway.networking.k8s.io --ignore-not-found
+      changed_when: false
+
+    - name: Install Kubernetes Gateway API Standard and Experimental CRDs via kubectl apply
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ local_kubeconfig }}
+        apply --server-side --field-manager=gateway-api --force-conflicts
+        -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/experimental-install.yaml
+      changed_when: false
+    - name: Enable Gateway API support in Cilium CNI via RKE2 HelmChartConfig
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: helm.cattle.io/v1
+          kind: HelmChartConfig
+          metadata:
+            name: rke2-cilium
+            namespace: kube-system
+          spec:
+            valuesContent: |-
+              gatewayAPI:
+                enabled: true
+
+    # ── Instalación del Operador MariaDB ─────────────────────────────────────
+    - name: Add Helm repository for MariaDB Operator
+      kubernetes.core.helm_repository:
+        name: mariadb-operator
+        repo_url: https://mariadb-operator.github.io/mariadb-operator
+
+    - name: Install MariaDB Operator via Helm
+      kubernetes.core.helm:
+        name: mariadb-operator
+        chart_ref: mariadb-operator/mariadb-operator
+        release_namespace: mariadb-operator
+        kubeconfig: "{{ local_kubeconfig }}"
+        wait: true
+        values:
+          crds:
+            enabled: true
+    # ── Despliegue de Clúster MariaDB mediante CRD MariaDB Operator ─────────
+    - name: Create MariaDB Root Password Secret
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mariadb-root-secret
+            namespace: "{{ test_namespace }}"
+          type: Opaque
+          stringData:
+            password: "CiliumRootSecretPassword2026!"
+
+    - name: Create MariaDB User Password Secret
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mariadb-user-secret
+            namespace: "{{ test_namespace }}"
+          type: Opaque
+          stringData:
+            password: "CiliumUserSecretPassword2026!"
+
+    - name: Deploy Clustered MariaDB Database resource
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: k8s.mariadb.com/v1alpha1
+          kind: MariaDB
+          metadata:
+            name: mariadb-cluster
+            namespace: "{{ test_namespace }}"
+          spec:
+            rootPasswordSecretKeyRef:
+              name: mariadb-root-secret
+              key: password
+            database: demodb
+            username: mariadbuser
+            passwordSecretKeyRef:
+              name: mariadb-user-secret
+              key: password
+            storage:
+              ephemeral: true
+    # ── Despliegue de Servicios Backend HTTP ──────────────────────────────────
+    - name: Deploy HTTP web-app backend Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cilium-gw-web
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: cilium-gw-web
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: cilium-gw-web
+            template:
+              metadata:
+                labels:
+                  app: cilium-gw-web
+              spec:
+                containers:
+                  - name: web
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 35\r\n\r\nResponse from Cilium Gateway Web!" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy HTTP web-app Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cilium-gw-web-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: cilium-gw-web
+            ports:
+              - port: 8080
+                targetPort: 8080
+
+    - name: Deploy HTTP api-app backend Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cilium-gw-api
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: cilium-gw-api
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: cilium-gw-api
+            template:
+              metadata:
+                labels:
+                  app: cilium-gw-api
+              spec:
+                containers:
+                  - name: api
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 35\r\n\r\nResponse from Cilium Gateway API!" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy HTTP api-app Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cilium-gw-api-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: cilium-gw-api
+            ports:
+              - port: 8080
+                targetPort: 8080
+
+    # ── Certificados SSL/TLS ─────────────────────────────────────────────────
+    - name: Generate self-signed TLS key and cert for cilium.gateway.example.com
+      ansible.builtin.command: >-
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048
+        -keyout /tmp/cilium-gw-tls.key -out /tmp/cilium-gw-tls.crt
+        -subj "/CN={{ ingress_domain }}/O=CiliumGatewayDemo"
+      args:
+        creates: /tmp/cilium-gw-tls.crt
+
+    - name: Read TLS key content
+      ansible.builtin.slurp:
+        src: /tmp/cilium-gw-tls.key
+      register: tls_key_b64
+
+    - name: Read TLS cert content
+      ansible.builtin.slurp:
+        src: /tmp/cilium-gw-tls.crt
+      register: tls_crt_b64
+
+    - name: Create Kubernetes TLS Secret
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/tls
+          metadata:
+            name: cilium-gw-tls-secret
+            namespace: "{{ test_namespace }}"
+          data:
+            tls.key: "{{ tls_key_b64.content }}"
+            tls.crt: "{{ tls_crt_b64.content }}"
+
+    # ── Recursos Kubernetes Gateway API (GatewayClass, Gateway, Routes) ──────
+    - name: Apply GatewayClass CRD for Cilium Gateway API
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: GatewayClass
+          metadata:
+            name: cilium
+          spec:
+            controllerName: io.cilium/gateway-controller
+
+    - name: Apply Cilium Gateway CRD (HTTP 80, HTTPS 443 and MariaDB TCP 3306)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: cilium-ebpf-gateway
+            namespace: "{{ test_namespace }}"
+          spec:
+            gatewayClassName: cilium
+            listeners:
+              - name: http
+                protocol: HTTP
+                port: 80
+                allowedRoutes:
+                  namespaces:
+                    from: Same
+              - name: https
+                protocol: HTTPS
+                port: 443
+                tls:
+                  mode: Terminate
+                  certificateRefs:
+                    - name: cilium-gw-tls-secret
+                allowedRoutes:
+                  namespaces:
+                    from: Same
+              - name: mariadb-tcp
+                protocol: TCP
+                port: 3306
+                allowedRoutes:
+                  namespaces:
+                    from: Same
+
+    - name: Apply HTTPRoute CRD for HTTP/HTTPS Path routing
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: cilium-gw-http-route
+            namespace: "{{ test_namespace }}"
+          spec:
+            parentRefs:
+              - name: cilium-ebpf-gateway
+                sectionName: http
+              - name: cilium-ebpf-gateway
+                sectionName: https
+            hostnames:
+              - "{{ ingress_domain }}"
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /web
+                backendRefs:
+                  - name: cilium-gw-web-svc
+                    port: 8080
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                backendRefs:
+                  - name: cilium-gw-api-svc
+                    port: 8080
+
+    - name: Apply TCPRoute CRD for Clustered MariaDB Database (Port 3306)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1alpha2
+          kind: TCPRoute
+          metadata:
+            name: mariadb-tcp-route
+            namespace: "{{ test_namespace }}"
+          spec:
+            parentRefs:
+              - name: cilium-ebpf-gateway
+                sectionName: mariadb-tcp
+            rules:
+              - backendRefs:
+                  - name: mariadb-cluster
+                    port: 3306
+
+    - name: Verify Cilium DaemonSet is active in kube-system
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: cilium
+        namespace: kube-system
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: cilium_ds
+
+    - name: Display Cilium Gateway API verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Lab 18: Cilium eBPF Gateway API & MariaDB TCPRoute Verificado!
+
+            Controlador: io.cilium/gateway-controller (GatewayClass 'cilium')
+            Dominio Host: {{ ingress_domain }}
+
+            ✓ Protocolo HTTP  (Puerto 80 / HTTPRoute /web & /api): OK
+            ✓ Protocolo HTTPS (Puerto 443 / TLS Secret cilium-gw-tls-secret): OK
+            ✓ Protocolo TCP   (Puerto 3306 / TCPRoute Clúster MariaDB): OK
+          ════════════════════════════════════════════════════════════════

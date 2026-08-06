@@ -174,7 +174,7 @@
         (kubevip_ds.resources[0].status.desiredNumberScheduled)
       when: is_primary and rke2_vip is defined
 
-    - name: Wait for the VIP to answer on port 6443
+    - name: Wait for the VIP to answer on API port 6443
       ansible.builtin.wait_for:
         host: "{{ rke2_vip }}"
         port: 6443
@@ -183,6 +183,14 @@
       delegate_to: localhost
       when: is_primary and rke2_vip is defined
 
+    - name: Wait for the VIP to answer on Supervisor port 9345
+      ansible.builtin.wait_for:
+        host: "{{ rke2_vip }}"
+        port: 9345
+        delay: 2
+        timeout: 60
+      delegate_to: localhost
+      when: is_primary and rke2_vip is defined
     - name: Point the local kubeconfig at the VIP
       ansible.builtin.replace:
         path: "{{ local_kubeconfig }}"

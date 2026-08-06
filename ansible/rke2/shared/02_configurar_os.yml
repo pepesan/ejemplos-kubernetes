@@ -63,3 +63,22 @@
           - open-iscsi
           - nfs-common
         state: present
+
+    - name: Configure SSH profile QoL settings (kubectl completion, aliases, KUBECONFIG)
+      ansible.builtin.copy:
+        dest: /etc/profile.d/rke2.sh
+        mode: "0644"
+        content: |
+          # RKE2 Quality-of-Life Profile Settings
+          if [ -f /etc/rancher/rke2/rke2.yaml ]; then
+            export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+          fi
+          export PATH=$PATH:/var/lib/rancher/rke2/bin
+          alias k=kubectl
+          if command -v kubectl >/dev/null 2>&1; then
+            source <(kubectl completion bash) 2>/dev/null || true
+            complete -o default -F __start_kubectl k 2>/dev/null || true
+          fi
+          if command -v crictl >/dev/null 2>&1; then
+            source <(crictl completion bash) 2>/dev/null || true
+          fi

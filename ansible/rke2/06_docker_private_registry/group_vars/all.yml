@@ -9,3 +9,9 @@ rke2_token: "secret-rke2-token-2026"
 registry_container_name: "rke2-registry-mirror"
 registry_mirror_host: "10.207.154.1"
 registry_mirror_port: 5000
+
+# Enterprise Registry TLS & Auth configuration options
+registry_use_tls: false
+registry_auth: false
+registry_auth_user: "rke2user"
+registry_auth_password: "rke2secret2026"

@@ -1,0 +1,120 @@
+---
+# Lab 05 — Verification of HA Cluster, etcd Quorum and Supervisor 9345 Redundancy.
+#
+# 1. Verifies that all 3 Server nodes and 3 Worker nodes report Ready.
+# 2. Validates Supervisor port 9345 availability on the floating VIP (10.207.154.60:9345),
+#    confirming that new nodes join through a high-availability endpoint.
+# 3. Validates Supervisor port 9345 availability directly on all individual server nodes,
+#    confirming redundant supervisor endpoints across the entire control plane.
+# 4. Verifies etcd static pod health and quorum in the kube-system namespace.
+#
+# Idempotent: re-running this playbook leaves the cluster state unchanged.
+
+- name: Verify HA Cluster Quorum, API 6443 and Supervisor 9345 Redundancy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    expected_servers: "{{ groups['rke2_servers'] }}"
+    expected_workers: "{{ groups['rke2_workers'] }}"
+  tasks:
+    - name: Wait for all server and worker nodes to report Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: all_nodes_info
+      retries: 60
+      delay: 5
+      until: >
+        all_nodes_info.resources | default([]) | length >= 6 and
+        (all_nodes_info.resources | rejectattr('status.conditions', 'undefined') |
+          selectattr('status.conditions', 'search', 'KubeletReady') | list | length) >= 6
+
+    - name: Check Kubernetes API port 6443 on VIP
+      ansible.builtin.wait_for:
+        host: "{{ rke2_vip }}"
+        port: 6443
+        timeout: 10
+      register: vip_api_check
+
+    - name: Check Supervisor registration port 9345 on VIP
+      ansible.builtin.wait_for:
+        host: "{{ rke2_vip }}"
+        port: 9345
+        timeout: 10
+      register: vip_supervisor_check
+
+    - name: Assert VIP handles both API 6443 and Supervisor 9345 ports
+      ansible.builtin.assert:
+        that:
+          - vip_api_check.elapsed < 10
+          - vip_supervisor_check.elapsed < 10
+        fail_msg: "VIP {{ rke2_vip }} failed to answer on dual ports (6443 / 9345)"
+        success_msg: "VIP {{ rke2_vip }} successfully handles both API (6443) and Supervisor (9345) traffic."
+
+    - name: Check Supervisor port 9345 directly on every control plane node
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 9345
+        timeout: 10
+      loop: "{{ expected_servers }}"
+      register: server_supervisor_checks
+
+    - name: Assert every control plane node presents active Supervisor endpoint
+      ansible.builtin.assert:
+        that:
+          - item.elapsed < 10
+        fail_msg: "Supervisor port 9345 not reachable on server node {{ item.item }}"
+        success_msg: "Supervisor port 9345 active on all control plane nodes."
+      loop: "{{ server_supervisor_checks.results }}"
+
+    - name: Query etcd static Pods in kube-system namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+        label_selectors:
+          - component=etcd
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: etcd_pods_info
+
+    - name: Extract running etcd Pod names
+      ansible.builtin.set_fact:
+        running_etcd_pods: >-
+          {{
+            etcd_pods_info.resources | default([]) |
+            selectattr('status.phase', 'equalto', 'Running') |
+            map(attribute='metadata.name') | list
+          }}
+
+    - name: Assert 3 etcd members are Running to form quorum
+      ansible.builtin.assert:
+        that:
+          - running_etcd_pods | length >= 3
+        fail_msg: "etcd quorum incomplete: expected 3 members, found {{ running_etcd_pods | length }}"
+        success_msg: "etcd distributed quorum verified with 3 active control-plane members."
+
+    - name: Display HA Cluster & Supervisor 9345 Redundancy verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Lab 05: Alta Disponibilidad (HA 3S+3W) & Redundancia Supervisor 9345
+
+            VIP Flotante: {{ rke2_vip }}
+            - Puerto API K8s (6443): OK (Servido por VIP / kube-vip)
+            - Puerto Supervisor (9345): OK (Servido por VIP / kube-vip)
+
+            Nodos Server (etcd Quorum): {{ expected_servers | join(', ') }}
+            - etcd Members Activos: {{ running_etcd_pods | join(', ') }}
+            - Supervisor Directo 9345: Verificado en el 100% de los Servers
+
+            Nodos Worker (Agentes): {{ expected_workers | join(', ') }}
+
+            ✓ Redundancia Supervisor 9345: Los nuevos nodos se unen al clúster
+              a través del punto de entrada en Alta Disponibilidad (VIP:9345),
+              eliminando el punto único de fallo (SPOF) en el bootstrapping.
+          ════════════════════════════════════════════════════════════════
