@@ -1,0 +1,233 @@
+---
+# Lab 07 — Rolling upgrade of an RKE2 cluster.
+#
+# Upgrades the cluster from {{ rke2_version }} to {{ rke2_version_upgrade }}.
+# Sequence: server nodes first (serial: 1), then workers with drain/uncordon.
+# After the live upgrade, the System Upgrade Controller is deployed with example
+# Plans to demonstrate the automated upgrade path.
+#
+# Idempotent: when all nodes already run rke2_version_upgrade, every task
+# reports ok/skipped (changed=0).
+
+# ── Play 1: Upgrade Server nodes ─────────────────────────────────────────────
+- name: Rolling upgrade of RKE2 Server nodes
+  hosts: rke2_servers
+  serial: 1
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+  tasks:
+    - name: Check the currently installed RKE2 version
+      ansible.builtin.command: rke2 --version
+      changed_when: false
+      register: rke2_current_version
+
+    - name: Set upgrade_needed flag
+      ansible.builtin.set_fact:
+        upgrade_needed: "{{ rke2_version_upgrade not in rke2_current_version.stdout }}"
+
+    - name: Download the RKE2 installer script for upgrade
+      ansible.builtin.get_url:
+        url: https://get.rke2.io
+        dest: /tmp/rke2-install.sh
+        mode: "0755"
+        force: true
+      when: upgrade_needed
+
+    - name: Run the RKE2 Server installer with the new version
+      ansible.builtin.command: /tmp/rke2-install.sh
+      environment:
+        INSTALL_RKE2_VERSION: "{{ rke2_version_upgrade }}"
+      when: upgrade_needed
+
+    - name: Restart rke2-server to apply the upgrade
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: restarted
+        daemon_reload: true
+      when: upgrade_needed
+
+    - name: Wait for the server node to report Ready after upgrade
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ inventory_hostname }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      delegate_to: localhost
+      register: node_info
+      retries: 60
+      delay: 5
+      until: >
+        node_info.resources | default([]) | length > 0 and
+        node_info.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Ready') |
+          selectattr('status', 'equalto', 'True') | list | length > 0
+
+# ── Play 2: Upgrade Worker / Agent nodes ──────────────────────────────────────
+- name: Rolling upgrade of RKE2 Worker nodes
+  hosts: rke2_workers
+  serial: 1
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+  tasks:
+    - name: Check the currently installed RKE2 version
+      ansible.builtin.command: rke2 --version
+      changed_when: false
+      register: rke2_current_version
+
+    - name: Set upgrade_needed flag
+      ansible.builtin.set_fact:
+        upgrade_needed: "{{ rke2_version_upgrade not in rke2_current_version.stdout }}"
+
+    - name: Drain the worker node before upgrade
+      kubernetes.core.k8s_drain:
+        name: "{{ inventory_hostname }}"
+        state: drain
+        delete_options:
+          ignore_daemonsets: true
+          delete_emptydir_data: true
+          force: true
+        kubeconfig: "{{ local_kubeconfig }}"
+      delegate_to: localhost
+      when: upgrade_needed
+
+    - name: Download the RKE2 installer script for upgrade
+      ansible.builtin.get_url:
+        url: https://get.rke2.io
+        dest: /tmp/rke2-install.sh
+        mode: "0755"
+        force: true
+      when: upgrade_needed
+
+    - name: Run the RKE2 Agent installer with the new version
+      ansible.builtin.command: /tmp/rke2-install.sh
+      environment:
+        INSTALL_RKE2_TYPE: agent
+        INSTALL_RKE2_VERSION: "{{ rke2_version_upgrade }}"
+      when: upgrade_needed
+
+    - name: Restart rke2-agent to apply the upgrade
+      ansible.builtin.systemd:
+        name: rke2-agent
+        state: restarted
+        daemon_reload: true
+      when: upgrade_needed
+
+    - name: Uncordon the worker node after upgrade
+      kubernetes.core.k8s_drain:
+        name: "{{ inventory_hostname }}"
+        state: uncordon
+        kubeconfig: "{{ local_kubeconfig }}"
+      delegate_to: localhost
+      when: upgrade_needed
+
+    - name: Wait for the worker node to report Ready after upgrade
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ inventory_hostname }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      delegate_to: localhost
+      register: node_info
+      retries: 60
+      delay: 5
+      until: >
+        node_info.resources | default([]) | length > 0 and
+        node_info.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Ready') |
+          selectattr('status', 'equalto', 'True') | list | length > 0
+
+# ── Play 3: Verify the upgrade across all nodes ──────────────────────────────
+- name: Verify all nodes run the upgraded kubelet version
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+  tasks:
+    - name: Wait for every node to report the upgraded kubelet version
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: all_nodes
+      retries: 60
+      delay: 5
+      until: >
+        all_nodes.resources | default([]) | length > 0 and
+        all_nodes.resources |
+          rejectattr('status.nodeInfo.kubeletVersion', 'search',
+            rke2_version_upgrade | regex_replace('\+rke2r\d+$', '')) |
+          list | length == 0
+
+    - name: Report the kubelet version on every node
+      ansible.builtin.debug:
+        msg: >
+          Node {{ item.metadata.name }} →
+          {{ item.status.nodeInfo.kubeletVersion }}
+      loop: "{{ all_nodes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+# ── Play 4: Deploy the System Upgrade Controller (reference) ──────────────────
+- name: Deploy the Rancher System Upgrade Controller
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+  tasks:
+    - name: Create the system-upgrade namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: system-upgrade
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+
+    - name: Apply the System Upgrade Controller manifest
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/templates/system-upgrade-controller.yaml"
+        kubeconfig: "{{ local_kubeconfig }}"
+
+    - name: Wait for the Plan CRD to be established
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: plans.upgrade.cattle.io
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: plan_crd
+      retries: 30
+      delay: 3
+      until: >
+        plan_crd.resources | default([]) | length > 0 and
+        plan_crd.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Established') |
+          selectattr('status', 'equalto', 'True') | list | length > 0
+    - name: Apply the server upgrade Plan
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/templates/upgrade-plan-server.yaml"
+        kubeconfig: "{{ local_kubeconfig }}"
+
+    - name: Apply the worker upgrade Plan
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/templates/upgrade-plan-worker.yaml"
+        kubeconfig: "{{ local_kubeconfig }}"
+
+    - name: Wait for the System Upgrade Controller Deployment to be available
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: system-upgrade-controller
+        namespace: system-upgrade
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: suc_deploy
+      retries: 30
+      delay: 5
+      until: >
+        suc_deploy.resources | default([]) | length > 0 and
+        (suc_deploy.resources[0].status.availableReplicas | default(0)) >= 1

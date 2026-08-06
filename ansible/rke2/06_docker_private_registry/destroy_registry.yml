@@ -1,0 +1,12 @@
+---
+# Lab 06 teardown: remove the local registry mirror container from the LXD host.
+# Invoked automatically by shared/destroy_lab.sh (destroy_*.yml discovery).
+- name: Tear down the local registry mirror for lab 06
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Remove the registry mirror container
+      community.docker.docker_container:
+        name: "{{ registry_container_name }}"
+        state: absent

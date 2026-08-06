@@ -1,0 +1,237 @@
+---
+# Lab 10 — Full Monitoring & Logging Stack (Prometheus, Grafana, Loki/Promtail/Fluentbit).
+#
+# 1. Prepares storage prerequisites (iSCSI) and deploys Longhorn v1.12.0.
+# 2. Deploys `kube-prometheus-stack` (Prometheus Operator, Prometheus, Grafana,
+#    node-exporter, kube-state-metrics) via Helm into the `monitoring` namespace.
+# 3. Deploys `loki-stack` (Loki + Promtail log collector) via Helm into the
+#    `logging` namespace, collecting `/var/log/containers/*.log`.
+# 4. Deploys a sample workload (`log-producer-pod`) emitting structured logs.
+# 5. Configures Loki as an active log datasource inside Grafana.
+# 6. Asserts HTTP availability of Grafana and Prometheus endpoints and displays
+#    access credentials and URLs.
+#
+# Idempotent: re-executing this playbook on an established cluster leaves all
+# resources unchanged (changed=0).
+
+# ── Play 1: Prepare storage prerequisites on RKE2 nodes ───────────────────────
+- name: Prepare storage prerequisites on all cluster nodes
+  hosts: rke2_cluster
+  gather_facts: false
+  tasks:
+    - name: Persist the iscsi_tcp kernel module configuration
+      ansible.builtin.copy:
+        content: "iscsi_tcp\n"
+        dest: /etc/modules-load.d/iscsi.conf
+        mode: "0644"
+
+    - name: Load the iscsi_tcp kernel module immediately
+      ansible.builtin.command: modprobe iscsi_tcp
+      register: modprobe_res
+      changed_when: false
+
+    - name: Enable and start the open-iscsi service
+      ansible.builtin.systemd:
+        name: iscsid
+        enabled: true
+        state: started
+
+# ── Play 2: Deploy Longhorn via Helm ─────────────────────────────────────────
+- name: Deploy Longhorn Storage Engine
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+  tasks:
+    - name: Add Longhorn Helm repo and install chart
+      kubernetes.core.helm:
+        name: longhorn
+        chart_ref: longhorn
+        chart_repo_url: https://charts.longhorn.io
+        chart_version: "{{ longhorn_chart_version }}"
+        release_namespace: "{{ longhorn_namespace }}"
+        create_namespace: true
+        kubeconfig: "{{ local_kubeconfig }}"
+        state: present
+        wait: true
+        wait_timeout: "600s"
+
+# ── Play 3: Deploy kube-prometheus-stack (Prometheus & Grafana) ───────────────
+- name: Deploy Monitoring Stack (Prometheus Operator & Grafana)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+  tasks:
+    - name: Ensure the monitoring namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ monitoring_namespace }}"
+
+    - name: Deploy kube-prometheus-stack via Helm
+      kubernetes.core.helm:
+        name: kube-prometheus-stack
+        chart_ref: kube-prometheus-stack
+        chart_repo_url: https://prometheus-community.github.io/helm-charts
+        release_namespace: "{{ monitoring_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+        state: present
+        values:
+          grafana:
+            adminPassword: "{{ grafana_admin_password }}"
+            service:
+              type: NodePort
+              nodePort: "{{ grafana_nodeport }}"
+          prometheus:
+            prometheusSpec:
+              serviceMonitorSelectorNilUsesHelmValues: false
+            service:
+              type: NodePort
+              nodePort: "{{ prometheus_nodeport }}"
+        wait: true
+        wait_timeout: "600s"
+
+# ── Play 4: Deploy Loki & Promtail Logging Stack ──────────────────────────────
+- name: Deploy Logging Stack (Loki & Promtail / Fluentbit collector)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+  tasks:
+    - name: Ensure the logging namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ logging_namespace }}"
+
+    - name: Deploy loki-stack via Helm
+      kubernetes.core.helm:
+        name: loki-stack
+        chart_ref: loki-stack
+        chart_repo_url: https://grafana.github.io/helm-charts
+        chart_version: "{{ loki_stack_chart_version | default('2.10.3') }}"
+        release_namespace: "{{ logging_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+        state: present
+        values:
+          loki:
+            enabled: true
+          promtail:
+            enabled: true
+          grafana:
+            enabled: false
+        wait: true
+        wait_timeout: "600s"
+
+    - name: Register Loki datasource in Grafana
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: kube-prometheus-stack-loki-datasource
+            namespace: "{{ monitoring_namespace }}"
+            labels:
+              grafana_datasource: "1"
+          data:
+            loki-datasource.yaml: |
+              apiVersion: 1
+              datasources:
+                - name: Loki
+                  type: loki
+                  access: proxy
+                  url: http://loki-stack.{{ logging_namespace }}.svc.cluster.local:3100
+                  isDefault: false
+
+# ── Play 5: Deploy Sample Log Producer Workload ───────────────────────────────
+- name: Deploy Sample Log Producer Workload
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+  tasks:
+    - name: Deploy log-producer-pod emitting JSON structured logs
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: log-producer-pod
+            namespace: default
+            labels:
+              app: log-producer
+          spec:
+            restartPolicy: Always
+            containers:
+              - name: logger
+                image: busybox:1.36
+                command:
+                  - sh
+                  - -c
+                  - 'while true; do echo "{\"level\":\"info\",\"msg\":\"RKE2 observability log sample\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"; sleep 5; done'
+
+# ── Play 6: Verify Observability Endpoints and Banner ────────────────────────
+- name: Verify Observability Stack Endpoints
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    primary_server: "{{ groups['rke2_servers'][0] }}"
+    server_ip: "{{ hostvars[primary_server].ansible_host }}"
+  tasks:
+    - name: Wait for Grafana web UI to answer on NodePort 30080
+      ansible.builtin.uri:
+        url: "http://{{ server_ip }}:{{ grafana_nodeport }}/api/health"
+        status_code: 200
+      register: grafana_health
+      retries: 30
+      delay: 5
+      until: grafana_health.status == 200
+
+    - name: Wait for Prometheus web UI to answer on NodePort 30090
+      ansible.builtin.uri:
+        url: "http://{{ server_ip }}:{{ prometheus_nodeport }}/-/healthy"
+        status_code: 200
+      register: prom_health
+      retries: 30
+      delay: 5
+      until: prom_health.status == 200
+
+    - name: Display Observability Access Banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            RKE2 Observability Stack Deployed & Verified!
+
+            📊 Grafana Dashboard:
+               URL:      http://{{ server_ip }}:{{ grafana_nodeport }}
+               User:     admin
+               Password: {{ grafana_admin_password }}
+
+            📈 Prometheus Metrics UI:
+               URL:      http://{{ server_ip }}:{{ prometheus_nodeport }}
+
+            📜 Loki Log Aggregator:
+               Cluster Endpoint: http://loki-stack.{{ logging_namespace }}.svc.cluster.local:3100
+               Datasource:       Pre-configured in Grafana (Loki)
+
+            🔍 Sample Log Producer Pod:
+               kubectl logs -n default log-producer-pod -f
+          ════════════════════════════════════════════════════════════════

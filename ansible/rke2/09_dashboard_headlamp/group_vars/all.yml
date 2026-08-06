@@ -1,0 +1,11 @@
+lxd_network: "lxdbr0"
+lxd_image: "k8s-template"
+rke2_version: "v1.36.3+rke2r1"
+rke2_cni: "canal"
+rke2_token: "secret-rke2-headlamp-token-2026"
+
+# Headlamp Dashboard settings
+headlamp_chart_version: "0.44.0"
+headlamp_namespace: "headlamp"
+headlamp_nodeport: 30090
+headlamp_token_file: "{{ lookup('env', 'PWD') }}/headlamp_token.txt"

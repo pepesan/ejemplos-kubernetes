@@ -1,5 +1,5 @@
 ---
-- name: Crear/actualizar VMs LXD para el clúster RKE2
+- name: Create/update LXD VMs for the RKE2 cluster
   hosts: localhost
   connection: local
   gather_facts: false
@@ -7,7 +7,7 @@
     lxd_network: "lxdbr0"
     lxd_image: "k8s-template"
   tasks:
-    - name: Crear/actualizar instancias VM en LXD
+    - name: Create/update VM instances in LXD
       community.general.lxd_container:
         name: "{{ item }}"
         type: virtual-machine
@@ -33,7 +33,7 @@
         timeout: 90
       loop: "{{ groups['rke2_cluster'] }}"
 
-    - name: Esperar a que el agente LXD responda en cada VM
+    - name: Wait for the LXD agent to answer on each VM
       ansible.builtin.command: 'sg lxd -c "lxc exec {{ item }} -- true"'
       register: lxd_agent_status
       until: lxd_agent_status.rc == 0
@@ -42,7 +42,10 @@
       loop: "{{ groups['rke2_cluster'] }}"
       changed_when: false
 
-    - name: Configurar directorio .ssh en cada VM
+    # SSH bootstrap — chicken-and-egg: we cannot use Ansible modules over SSH
+    # because the SSH keys are not yet injected. The LXD agent channel (lxc exec
+    # / lxc file push) is the only path available at this stage.
+    - name: Set up the .ssh directory on each VM
       ansible.builtin.command: 'sg lxd -c "lxc exec {{ item.0 }} -- {{ item.1 }}"'
       loop: "{{ groups['rke2_cluster'] | product([
         'mkdir -p /root/.ssh',
@@ -52,12 +55,12 @@
         label: "{{ item.0 }} -> {{ item.1 }}"
       changed_when: false
 
-    - name: Inyectar clave pública SSH ed25519 en cada VM
+    - name: Inject the host ed25519 public key into each VM
       ansible.builtin.command: 'sg lxd -c "lxc file push ~/.ssh/id_ed25519.pub {{ item }}/root/.ssh/authorized_keys"'
       loop: "{{ groups['rke2_cluster'] }}"
       changed_when: false
 
-    - name: Fijar permisos SSH en cada VM
+    - name: Fix SSH ownership and permissions on each VM
       ansible.builtin.command: 'sg lxd -c "lxc exec {{ item.0 }} -- {{ item.1 }}"'
       loop: "{{ groups['rke2_cluster'] | product([
         'chown -R root:root /root/.ssh',
@@ -67,7 +70,7 @@
         label: "{{ item.0 }} -> {{ item.1 }}"
       changed_when: false
 
-    - name: Esperar conectividad SSH en el puerto 22
+    - name: Wait for SSH connectivity on port 22
       ansible.builtin.wait_for:
         host: "{{ hostvars[item].ansible_host }}"
         port: 22
@@ -75,7 +78,7 @@
         timeout: 60
       loop: "{{ groups['rke2_cluster'] }}"
 
-    - name: VMs creadas y accesibles por SSH
+    - name: Report VMs ready and reachable over SSH
       ansible.builtin.debug:
-        msg: "VM {{ item }} lista en IP {{ hostvars[item].ansible_host }}"
+        msg: "VM {{ item }} ready at IP {{ hostvars[item].ansible_host }}"
       loop: "{{ groups['rke2_cluster'] }}"

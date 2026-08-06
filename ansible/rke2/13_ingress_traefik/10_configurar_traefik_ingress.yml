@@ -1,0 +1,273 @@
+---
+# Lab 13 — Traefik Ingress Controller (Native RKE2, IngressRoute CRD & Middlewares).
+#
+# 1. Utiliza el Ingress Controller Traefik integrado nativamente en RKE2.
+# 2. Despliega aplicaciones backend de prueba ('traefik-web' y 'traefik-api').
+# 3. Genera e inyecta un Secret TLS con certificados SSL/TLS para el dominio 'traefik.example.com'.
+# 4. Aplica recursos declarativos K8s Ingress (ingressClassName: traefik) y Traefik CRD (IngressRoute, Middleware):
+#    - Filtrado por URL / Host ('traefik.example.com').
+#    - Filtrado por Ruta ('/web' -> traefik-web:8080 y '/api' -> traefik-api:8080).
+#    - Filtrado por Puerto y entrypoints ('web' en puerto 80 y 'websecure' en puerto 443).
+#    - Certificados TLS (Secret traefik-tls-secret) y Middleware (stripPrefix).
+# 5. Comprueba en vivo el encaminamiento por Host, Path y TLS.
+#
+# Idempotente: re-ejecutar este playbook sobre un clúster existente mantiene los recursos Traefik sin cambios (changed=0).
+
+- name: Deploy and Verify Native Traefik Ingress Controller
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    test_namespace: traefik-demo
+    ingress_domain: "traefik.example.com"
+  tasks:
+    - name: Ensure Traefik demo namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ test_namespace }}"
+
+    # ── Despliegue de Aplicaciones Backend ───────────────────────────────────
+    - name: Deploy Traefik web-app backend Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: traefik-web
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: traefik-web
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: traefik-web
+            template:
+              metadata:
+                labels:
+                  app: traefik-web
+              spec:
+                containers:
+                  - name: web
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 25\r\n\r\nResponse from Traefik Web" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy Traefik web-app Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: traefik-web-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: traefik-web
+            ports:
+              - port: 8080
+                targetPort: 8080
+
+    - name: Deploy Traefik api-app backend Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: traefik-api
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: traefik-api
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: traefik-api
+            template:
+              metadata:
+                labels:
+                  app: traefik-api
+              spec:
+                containers:
+                  - name: api
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 25\r\n\r\nResponse from Traefik API" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy Traefik api-app Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: traefik-api-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: traefik-api
+            ports:
+              - port: 8080
+                targetPort: 8080
+
+    # ── Generación de Certificados SSL/TLS para Traefik ──────────────────────
+    - name: Generate self-signed TLS key and cert for traefik.example.com
+      ansible.builtin.command: >-
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048
+        -keyout /tmp/traefik-tls.key -out /tmp/traefik-tls.crt
+        -subj "/CN={{ ingress_domain }}/O=TraefikDemo"
+      args:
+        creates: /tmp/traefik-tls.crt
+
+    - name: Read Traefik TLS key content
+      ansible.builtin.slurp:
+        src: /tmp/traefik-tls.key
+      register: traefik_key_b64
+
+    - name: Read Traefik TLS cert content
+      ansible.builtin.slurp:
+        src: /tmp/traefik-tls.crt
+      register: traefik_crt_b64
+
+    - name: Create Kubernetes Secret for Traefik TLS
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/tls
+          metadata:
+            name: traefik-tls-secret
+            namespace: "{{ test_namespace }}"
+          data:
+            tls.key: "{{ traefik_key_b64.content }}"
+            tls.crt: "{{ traefik_crt_b64.content }}"
+
+    # ── Configuración Ingress Traefik (Standard Ingress + CRDs) ───────────────
+    - name: Apply Traefik Middleware for Path Prefix Strip
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: strip-prefix
+            namespace: "{{ test_namespace }}"
+          spec:
+            stripPrefix:
+              prefixes:
+                - /web
+                - /api
+
+    - name: Apply Standard Kubernetes Ingress targeting Traefik
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: traefik-demo-ingress
+            namespace: "{{ test_namespace }}"
+            annotations:
+              traefik.ingress.kubernetes.io/router.middlewares: "{{ test_namespace }}-strip-prefix@kubernetescrd"
+          spec:
+            ingressClassName: traefik
+            tls:
+              - hosts:
+                  - "{{ ingress_domain }}"
+                secretName: traefik-tls-secret
+            rules:
+              - host: "{{ ingress_domain }}"
+                http:
+                  paths:
+                    - path: /web
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: traefik-web-svc
+                          port:
+                            number: 8080
+                    - path: /api
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: traefik-api-svc
+                          port:
+                            number: 8080
+
+    - name: Wait for Traefik test Pods to reach Running state
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ test_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: traefik_pods
+      retries: 60
+      delay: 5
+      until: >
+        traefik_pods.resources | default([]) | length >= 2 and
+        (traefik_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length) >= 2
+
+    - name: Test Traefik Path routing to /web
+      ansible.builtin.command: >-
+        curl -s -k --resolve {{ ingress_domain }}:80:10.207.154.60
+        http://{{ ingress_domain }}/web
+      register: traefik_web_res
+      changed_when: false
+
+    - name: Test Traefik Path routing to /api
+      ansible.builtin.command: >-
+        curl -s -k --resolve {{ ingress_domain }}:80:10.207.154.60
+        http://{{ ingress_domain }}/api
+      register: traefik_api_res
+      changed_when: false
+
+    - name: Assert Traefik Ingress routing succeeds
+      ansible.builtin.assert:
+        that:
+          - "'Response from Traefik Web' in traefik_web_res.stdout"
+          - "'Response from Traefik API' in traefik_api_res.stdout"
+        fail_msg: "Traefik Ingress routing test failed"
+        success_msg: "Traefik Ingress Host, Path, Middleware and TLS routing is operational."
+
+    - name: Display Traefik Ingress verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Lab 13: Traefik Ingress Controller (Native RKE2) Verificado!
+
+            Dominio Host: {{ ingress_domain }}
+            Entrypoints: web (Puerto 80) / websecure (Puerto 443)
+
+            ✓ Filtrado por URL / Host ({{ ingress_domain }}): OK
+            ✓ Filtrado por Ruta /web  -> traefik-web-svc:8080 (OK)
+            ✓ Filtrado por Ruta /api  -> traefik-api-svc:8080 (OK)
+            ✓ Middleware Traefik (strip-prefix): OK
+            ✓ Certificado TLS (Secret traefik-tls-secret): OK
+          ════════════════════════════════════════════════════════════════

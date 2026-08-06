@@ -1,0 +1,14 @@
+lxd_network: "lxdbr0"
+lxd_image: "k8s-template"
+rke2_version: "v1.36.3+rke2r1"
+rke2_cni: "canal"
+rke2_token: "secret-rke2-longhorn-token-2026"
+
+# Control-plane VIP advertised by kube-vip (ARP + leader election) on the
+# server nodes. Used as join endpoint (9345) and kubeconfig address (6443).
+rke2_vip: "10.207.154.60"
+kube_vip_version: "v1.2.2"
+
+# Longhorn storage orchestration settings
+longhorn_chart_version: "1.12.0"
+longhorn_namespace: "longhorn-system"

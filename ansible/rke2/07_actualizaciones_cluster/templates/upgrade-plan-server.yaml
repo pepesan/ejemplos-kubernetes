@@ -1,0 +1,21 @@
+# System Upgrade Controller — server upgrade Plan for RKE2.
+# This is a reference manifest applied by the lab playbook. The SUC watches
+# these Plan objects and automatically cordons, drains, upgrades (via the
+# rancher/rke2-upgrade image) and uncordons matching nodes.
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: server-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: In
+        values: ["true"]
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/rke2-upgrade
+  version: v1.36.2+rke2r1

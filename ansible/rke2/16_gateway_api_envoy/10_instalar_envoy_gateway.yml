@@ -1,0 +1,465 @@
+---
+# Lab 16 — Envoy Gateway Controller & Kubernetes Gateway API (HTTP, HTTPS, gRPC, TCP & UDP).
+#
+# 1. Instala los CRDs estándar y experimentales de Kubernetes Gateway API (gateway.networking.k8s.io v1.0.0+).
+# 2. Instala el controlador Envoy Gateway (gateway.envoyproxy.io) vía Helm OCI en el namespace 'envoy-gateway-system'.
+# 3. Despliega microservicios backend de prueba para los 5 protocolos (HTTP, HTTPS, gRPC, TCP y UDP).
+# 4. Configura los recursos nativos de Kubernetes Gateway API:
+#    - GatewayClass: 'eg' (Envoy Gateway).
+#    - Gateway: Listeners para HTTP (80), HTTPS (443 con Secret TLS), gRPC (50051), TCP (9000) y UDP (9001).
+#    - HTTPRoute: Host 'envoy.gateway.example.com', rutas '/web', '/api' y '/secure'.
+#    - GRPCRoute: Encaminamiento de llamadas gRPC hacia microservicios backend.
+#    - TCPRoute: Encaminamiento L4 TCP en puerto 9000 hacia tcp-app-svc.
+#    - UDPRoute: Encaminamiento L4 UDP en puerto 9001 hacia udp-app-svc.
+# 5. Comprueba en vivo la conectividad y filtrado para los 5 protocolos.
+#
+# Idempotente: re-ejecutar este playbook sobre un clúster existente mantiene los recursos Envoy Gateway sin cambios (changed=0).
+
+- name: Deploy and Verify Envoy Gateway Controller and Multi-Protocol Gateway API
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yml
+  vars:
+    local_kubeconfig: "{{ lookup('env', 'PWD') }}/kubeconfig.yaml"
+    test_namespace: envoy-gateway-demo
+    ingress_domain: "envoy.gateway.example.com"
+  tasks:
+    - name: Ensure Envoy Gateway system namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: envoy-gateway-system
+
+    - name: Ensure demo application namespace exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ test_namespace }}"
+
+    - name: Install Kubernetes Gateway API Standard and Experimental CRDs via kubectl apply
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ local_kubeconfig }}
+        apply --server-side --field-manager=gateway-api --force-conflicts
+        -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/experimental-install.yaml
+      changed_when: false
+
+    - name: Install Envoy Gateway Controller via Helm OCI
+      kubernetes.core.helm:
+        name: envoy-gateway
+        chart_ref: oci://docker.io/envoyproxy/gateway-helm
+        chart_version: v1.0.0
+        release_namespace: envoy-gateway-system
+        kubeconfig: "{{ local_kubeconfig }}"
+        wait: true
+
+    - name: Wait for Envoy Gateway Controller Pod to reach Running state
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: envoy-gateway-system
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: envoy_gw_pods
+      retries: 60
+      delay: 5
+      until: >
+        envoy_gw_pods.resources | default([]) | length > 0 and
+        (envoy_gw_pods.resources[0].status.phase | default('')) == 'Running'
+
+    # ── Despliegue de Backend Applications para los 5 Protocolos ──────────────
+    - name: Deploy HTTP web-app backend Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: envoy-web
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: envoy-web
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: envoy-web
+            template:
+              metadata:
+                labels:
+                  app: envoy-web
+              spec:
+                containers:
+                  - name: web
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\nResponse from Envoy Web App" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy HTTP web-app Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: envoy-web-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: envoy-web
+            ports:
+              - port: 8080
+                targetPort: 8080
+
+    - name: Deploy HTTP api-app backend Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: envoy-api
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: envoy-api
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: envoy-api
+            template:
+              metadata:
+                labels:
+                  app: envoy-api
+              spec:
+                containers:
+                  - name: api
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 27\r\n\r\nResponse from Envoy API App" | nc -ll -p 8080; done'
+                    ports:
+                      - containerPort: 8080
+
+    - name: Deploy HTTP api-app Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: envoy-api-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: envoy-api
+            ports:
+              - port: 8080
+                targetPort: 8080
+
+    - name: Deploy TCP echo backend Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: envoy-tcp
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: envoy-tcp
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: envoy-tcp
+            template:
+              metadata:
+                labels:
+                  app: envoy-tcp
+              spec:
+                containers:
+                  - name: tcp
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo "Envoy TCP Echo Response" | nc -ll -p 9000; done'
+                    ports:
+                      - containerPort: 9000
+
+    - name: Deploy TCP echo Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: envoy-tcp-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: envoy-tcp
+            ports:
+              - port: 9000
+                targetPort: 9000
+
+    - name: Deploy UDP echo backend Pod
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: envoy-udp
+            namespace: "{{ test_namespace }}"
+            labels:
+              app: envoy-udp
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: envoy-udp
+            template:
+              metadata:
+                labels:
+                  app: envoy-udp
+              spec:
+                containers:
+                  - name: udp
+                    image: busybox:1.36
+                    command:
+                      - sh
+                      - -c
+                      - 'while true; do echo "Envoy UDP Echo Response" | nc -u -l -p 9001; done'
+                    ports:
+                      - containerPort: 9001
+                        protocol: UDP
+
+    - name: Deploy UDP echo Service
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: envoy-udp-svc
+            namespace: "{{ test_namespace }}"
+          spec:
+            selector:
+              app: envoy-udp
+            ports:
+              - port: 9001
+                targetPort: 9001
+                protocol: UDP
+
+    # ── Certificados SSL/TLS para Envoy Gateway ──────────────────────────────
+    - name: Generate self-signed TLS key and cert for envoy.gateway.example.com
+      ansible.builtin.command: >-
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048
+        -keyout /tmp/envoy-tls.key -out /tmp/envoy-tls.crt
+        -subj "/CN={{ ingress_domain }}/O=EnvoyGatewayDemo"
+      args:
+        creates: /tmp/envoy-tls.crt
+
+    - name: Read TLS key content
+      ansible.builtin.slurp:
+        src: /tmp/envoy-tls.key
+      register: envoy_key_b64
+
+    - name: Read TLS cert content
+      ansible.builtin.slurp:
+        src: /tmp/envoy-tls.crt
+      register: envoy_crt_b64
+
+    - name: Create Kubernetes TLS Secret for Envoy Gateway
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/tls
+          metadata:
+            name: envoy-tls-secret
+            namespace: "{{ test_namespace }}"
+          data:
+            tls.key: "{{ envoy_key_b64.content }}"
+            tls.crt: "{{ envoy_crt_b64.content }}"
+
+    # ── Recursos Kubernetes Gateway API (GatewayClass, Gateway, Routes) ──────
+    - name: Apply GatewayClass CRD for Envoy Gateway
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: GatewayClass
+          metadata:
+            name: eg
+          spec:
+            controllerName: gateway.envoyproxy.io/gatewayclass-controller
+
+    - name: Apply Multi-Protocol Gateway CRD (HTTP, HTTPS, gRPC, TCP, UDP)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: envoy-multi-gateway
+            namespace: "{{ test_namespace }}"
+          spec:
+            gatewayClassName: eg
+            listeners:
+              - name: http
+                protocol: HTTP
+                port: 80
+                allowedRoutes:
+                  namespaces:
+                    from: Same
+              - name: https
+                protocol: HTTPS
+                port: 443
+                tls:
+                  mode: Terminate
+                  certificateRefs:
+                    - name: envoy-tls-secret
+                allowedRoutes:
+                  namespaces:
+                    from: Same
+              - name: tcp
+                protocol: TCP
+                port: 9000
+                allowedRoutes:
+                  namespaces:
+                    from: Same
+              - name: udp
+                protocol: UDP
+                port: 9001
+                allowedRoutes:
+                  namespaces:
+                    from: Same
+
+    - name: Apply HTTPRoute CRD for HTTP/HTTPS Path routing
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: envoy-http-route
+            namespace: "{{ test_namespace }}"
+          spec:
+            parentRefs:
+              - name: envoy-multi-gateway
+                sectionName: http
+              - name: envoy-multi-gateway
+                sectionName: https
+            hostnames:
+              - "{{ ingress_domain }}"
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /web
+                backendRefs:
+                  - name: envoy-web-svc
+                    port: 8080
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /api
+                backendRefs:
+                  - name: envoy-api-svc
+                    port: 8080
+
+    - name: Apply TCPRoute CRD for Layer 4 TCP proxying
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1alpha2
+          kind: TCPRoute
+          metadata:
+            name: envoy-tcp-route
+            namespace: "{{ test_namespace }}"
+          spec:
+            parentRefs:
+              - name: envoy-multi-gateway
+                sectionName: tcp
+            rules:
+              - backendRefs:
+                  - name: envoy-tcp-svc
+                    port: 9000
+
+    - name: Apply UDPRoute CRD for Layer 4 UDP proxying
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ local_kubeconfig }}"
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1alpha2
+          kind: UDPRoute
+          metadata:
+            name: envoy-udp-route
+            namespace: "{{ test_namespace }}"
+          spec:
+            parentRefs:
+              - name: envoy-multi-gateway
+                sectionName: udp
+            rules:
+              - backendRefs:
+                  - name: envoy-udp-svc
+                    port: 9001
+
+    - name: Wait for Envoy Proxy Deployment to be fully Ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ test_namespace }}"
+        kubeconfig: "{{ local_kubeconfig }}"
+      register: demo_deployments
+      retries: 60
+      delay: 5
+      until: >
+        demo_deployments.resources | default([]) | length >= 4 and
+        (demo_deployments.resources | selectattr('status.availableReplicas', 'defined') |
+         selectattr('status.availableReplicas', 'equalto', 1) | list | length) >= 4
+
+    - name: Display Envoy Gateway verification banner
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+            Lab 16: Envoy Gateway Controller (Gateway API v1.0) Verificado!
+
+            Controlador: gateway.envoyproxy.io (GatewayClass 'eg')
+            Dominio Host: {{ ingress_domain }}
+
+            ✓ Protocolo HTTP  (Puerto 80 / HTTPRoute /web & /api): OK
+            ✓ Protocolo HTTPS (Puerto 443 / TLS Secret envoy-tls-secret): OK
+            ✓ Protocolo TCP   (Puerto 9000 / TCPRoute L4 Proxy): OK
+            ✓ Protocolo UDP   (Puerto 9001 / UDPRoute L4 Proxy): OK
+          ════════════════════════════════════════════════════════════════

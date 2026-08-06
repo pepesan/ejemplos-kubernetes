@@ -1,9 +1,9 @@
 ---
-- name: Configurar Sistema Operativo en los nodos RKE2
+- name: Configure the operating system on RKE2 nodes
   hosts: rke2_cluster
   gather_facts: true
   tasks:
-    - name: Deshabilitar unattended-upgrades y timers de APT automáticos
+    - name: Disable unattended-upgrades and automatic APT timers
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: stopped
@@ -14,19 +14,20 @@
         - apt-daily-upgrade.timer
       failed_when: false
 
-    - name: Desactivar swap temporalmente
+    # No Ansible module for swapoff — command is the correct approach.
+    - name: Disable swap immediately
       ansible.builtin.command: swapoff -a
       changed_when: false
       failed_when: false
 
-    - name: Comentar entrada de swap en /etc/fstab
+    - name: Comment out the swap entry in /etc/fstab
       ansible.builtin.replace:
         path: /etc/fstab
         regexp: '^([^#].*?\sswap\s+.*)$'
         replace: '# \1'
       failed_when: false
 
-    - name: Configurar módulos de kernel para RKE2
+    - name: Persist kernel modules required by RKE2
       ansible.builtin.copy:
         content: |
           overlay
@@ -34,7 +35,7 @@
         dest: /etc/modules-load.d/rke2.conf
         mode: "0644"
 
-    - name: Cargar módulos de kernel inmediatamente
+    - name: Load kernel modules immediately
       community.general.modprobe:
         name: "{{ item }}"
         state: present
@@ -43,26 +44,41 @@
         - br_netfilter
       failed_when: false
 
-    - name: Configurar parámetros sysctl para RKE2
-      ansible.builtin.copy:
-        content: |
-          net.bridge.bridge-nf-call-iptables  = 1
-          net.bridge.bridge-nf-call-ip6tables = 1
-          net.ipv4.ip_forward                 = 1
-        dest: /etc/sysctl.d/rke2.conf
-        mode: "0644"
-      register: sysctl_conf
+    - name: Set sysctl parameters for RKE2
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        sysctl_file: /etc/sysctl.d/rke2.conf
+        reload: true
+        state: present
+      loop:
+        - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
+        - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+        - { key: "net.ipv4.ip_forward",                 value: "1" }
 
-    - name: Aplicar parámetros sysctl
-      ansible.builtin.command: sysctl --system
-      when: sysctl_conf.changed
-      changed_when: true
-      failed_when: false
-
-    - name: Instalar paquetes base (curl, open-iscsi, nfs-common)
+    - name: Install base packages (curl, open-iscsi, nfs-common)
       ansible.builtin.package:
         name:
           - curl
           - open-iscsi
           - nfs-common
         state: present
+
+    - name: Configure SSH profile QoL settings (kubectl completion, aliases, KUBECONFIG)
+      ansible.builtin.copy:
+        dest: /etc/profile.d/rke2.sh
+        mode: "0644"
+        content: |
+          # RKE2 Quality-of-Life Profile Settings
+          if [ -f /etc/rancher/rke2/rke2.yaml ]; then
+            export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+          fi
+          export PATH=$PATH:/var/lib/rancher/rke2/bin
+          alias k=kubectl
+          if command -v kubectl >/dev/null 2>&1; then
+            source <(kubectl completion bash) 2>/dev/null || true
+            complete -o default -F __start_kubectl k 2>/dev/null || true
+          fi
+          if command -v crictl >/dev/null 2>&1; then
+            source <(crictl completion bash) 2>/dev/null || true
+          fi

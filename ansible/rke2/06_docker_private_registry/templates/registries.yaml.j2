@@ -1,0 +1,23 @@
+# /etc/rancher/rke2/registries.yaml
+# Routes every docker.io pull through the local pull-through cache registry
+# running on the LXD host. Containerd reads this file on (re)start of
+# rke2-server / rke2-agent.
+mirrors:
+  docker.io:
+    endpoint:
+      - "{{ 'https' if (registry_use_tls | default(false)) else 'http' }}://{{ registry_mirror_host }}:{{ registry_mirror_port }}"
+configs:
+  "{{ registry_mirror_host }}:{{ registry_mirror_port }}":
+{% if registry_use_tls | default(false) %}
+    tls:
+      ca_file: {{ registry_ca_file | default('/etc/rancher/rke2/registry-ca.crt') }}
+      insecure_skip_verify: {{ registry_insecure_skip_verify | default(false) }}
+{% else %}
+    tls:
+      insecure_skip_verify: true
+{% endif %}
+{% if registry_auth | default(false) %}
+    auth:
+      username: "{{ registry_auth_user | default('rke2user') }}"
+      password: "{{ registry_auth_password | default('rke2secret2026') }}"
+{% endif %}
