@@ -4,128 +4,42 @@ Este archivo detalla la secuencia de laboratorios prácticos diseñados para ser
 
 ---
 
-## 📝 Tareas en Progreso (Auditoría de Versiones)
 
-Auditoría realizada 2026-08-09 para fijar **todas las versiones** (Helm charts, imágenes de contenedor, herramientas) como variables Ansible en `group_vars`, eliminando hardcodes en playbooks.
+## 📝 Pendiente de Validar (actualizado 2026-08-09, tras revalidación real con VMs)
 
-### Problemas Encontrados
+Auditoría de parametrización de versiones completada, y los 14 labs se han vuelto a probar contra
+VMs LXD reales (no simulación) usando `test_matrix_runner.sh`. Detalle completo, logs y veredictos
+lab a lab en [`MATRIX.md`](MATRIX.md). Resumen de lo que queda abierto ahora mismo:
 
-#### 1. Lab 04 - Rook Ceph (CRÍTICO)
-- [ ] **Falta variable `rook_ceph_chart_version`** en `group_vars/all.yml`
-  - Playbook `10_desplegar_rook_ceph.yml` la referencia pero no está definida
-  - **Fix**: Agregar versión (comprobar última estable en `https://charts.rook.io/index.yaml`)
-- [ ] Revalidar Lab 04 con 2 pasadas consecutivas tras el fix
+- **Lab 04 (Rook Ceph)**: fallo real encontrado (`ceph_csi_chart_version` sin definir, causaba
+  `ImagePullBackOff`/finalización de task). Fix aplicado (`ceph_csi_chart_version: "1.0.4"`).
+  Pendiente re-ejecutar `run_all.sh` (2 pasadas) para confirmar que el fix resuelve el problema.
+- **Lab 08 (Gateway API)**: fallo real encontrado (`grpc_demo_image: "kong/grpcbin:0.5"` — ese tag
+  no existe en Docker Hub). Fix aplicado (pin por digest en vez de tag). Pendiente re-ejecutar
+  `run_all.sh` (2 pasadas) para confirmar.
+- **Lab 13 (MongoDB Sharding)**: fallo real reproducible — el clúster `perconaservermongodb` nunca
+  alcanza `status.state=ready` en ninguna pasada (20 min de timeout agotado, dos veces). El
+  `inventory.ini` ya subió recursos una vez por este mismo síntoma y sigue sin ser suficiente, o hay
+  otra causa. Pendiente investigación dedicada (no es un simple ajuste de versión).
+- **Lab 05 (Ceph Externo)**: funcionalmente correcto (`failed=0` en ambas pasadas), pero con 3 tareas
+  cuyo `changed_when` no detecta correctamente la idempotencia real (clave SSH de Ceph,
+  `ceph orch host add`) — mejora de idempotencia deseable, no bloqueante.
+- **Multidistro** (`00_instalar_ansible.sh`): ✅ completado 2026-08-09, 10/10 distros OK con
+  ejecución real (antes era una simulación hardcodeada que nunca lanzaba nada).
+- **Labs 01, 02, 03, 06, 07, 09, 10, 11, 12, 14**: validados con VMs reales e idempotencia
+  confirmada (revisión completa de logs, no solo el resumen del runner).
 
-#### 2. Imágenes Container Hardcodeadas (TODOS LOS LABS)
-Las siguientes imágenes están hardcodeadas en playbooks sin variable Ansible:
-- `nginx:alpine` → Labs 01, 02, 06, 08 (test apps)
-- `alpine` → Labs 03, 04, 05 (verificación)
-- `busybox:1.36` → Lab 06 (test)
-- `kong/grpcbin` → Lab 08 (gRPC demo, también versión)
-- `grpcurl` versión `1.9.3` en descarga (Lab 08)
+### Bugs de framework encontrados y corregidos durante esta revalidación
 
-**Política**: Crear variables por lab para cada imagen:
-```yaml
-# group_vars/all.yml
-test_nginx_image: "nginx:alpine"
-test_alpine_image: "alpine:3.21"  # especificar versión
-test_busybox_image: "busybox:1.36"
-grpc_demo_image: "kong/grpcbin:0.5"
-grpcurl_version: "1.9.3"
-```
-
-#### 3. Hardcodes de APT sin Ramificación (Labs 02-05)
-**Contexto**: README.md dice multidistro, pero práctica es Ubuntu-only
-- Lab 02 (y heredados): `04_instalar_containerd.yml`, `05_instalar_k8s_tools.yml` usan `apt` + `deb822_repository` (Debian-only)
-- Lab 05: `03_configurar_os.yml` línea 76-92 (python3, lvm2), `10_desplegar_ceph_externo.yml` (cephadm)
-
-**Status**: Documentado pero NO se toca en este ciclo (se dejará como tech-debt, confirmado con usuario que "nodos guest siempre Ubuntu")
-
-### Tareas Ordenadas
-
-#### ✅ Fase 1: Fix Crítico Lab 04 (COMPLETADO)
-- [x] Task 1.1: Descubrir versión estable de rook-ceph chart → `1.14.7`
-- [x] Task 1.2: Agregar `rook_ceph_chart_version: "1.14.7"` a `04/group_vars/all.yml`
-- [ ] Task 1.3: Revalidar Lab 04 (2 pasadas `run_all.sh`) — **PENDIENTE EJECUCIÓN REAL**
-
-#### ✅ Fase 2: Parametrizar Imágenes Container (COMPLETADO)
-- [x] Task 2.1: Crear variables por lab para imágenes test
-  - Lab 01: `test_nginx_image`, `test_alpine_image`
-  - Lab 02: `test_nginx_image`, `test_alpine_image`
-  - Lab 03: `test_alpine_image`
-  - Lab 04: `test_alpine_image` (+ fix rook_ceph_chart_version arriba)
-  - Lab 05: `test_alpine_image`
-  - Lab 06: `test_nginx_image`, `test_busybox_image`
-  - Lab 08: `test_nginx_image`, `grpc_demo_image`, `grpcurl_version`
-
-- [x] Task 2.2: Reemplazar hardcodes en playbooks con `{{ variable }}`
-  - Lab 01: `08_desplegar_nginx.yml` → `nginx:alpine` → `{{ test_nginx_image }}`
-  - Lab 02: `10_despliegue_test.yml` → `nginx:alpine` → `{{ test_nginx_image }}`
-  - Lab 03: `11_verificar_persistencia_rwx.yml` → `alpine` → `{{ test_alpine_image }}`
-  - Lab 04: `11_verificar_rook_persistencia.yml` → `alpine` → `{{ test_alpine_image }}`
-  - Lab 05: `12_verificar_persistencia.yml` → `alpine` → `{{ test_alpine_image }}`
-  - Lab 06: `12_desplegar_apps_demo.yml` → `busybox:1.36` → `{{ test_busybox_image }}`
-  - Lab 08: `14_desplegar_grpc.yml` → `kong/grpcbin` → `{{ grpc_demo_image }}`
-
-- [x] Task 2.3: Versiones fijadas (sin `latest`)
-  - `nginx:1.31-alpine` (última versión 1.31.x)
-  - `alpine:3.21` (última versión estable)
-  - `busybox:1.36.1` (pinned a versión específica)
-  - `kong/grpcbin:0.5` (última versión oficial)
-  - `grpcurl v1.9.3` (herramienta)
-
-#### ⏳ Fase 3: Auditoría de Idempotencia de Labs (EN PROGRESO)
-- [x] Task 3.1: Seleccionar Lab 02 (base HA, heredado por todos)
-- [x] Task 3.2: Iniciada ejecución 1ª pasada (12:16 UTC)
-- [ ] Task 3.3: Ejecutar `run_all.sh` 2ª pasada (tras pasada 1)
-- [ ] Task 3.4: Ejecutar `destroy_all.sh` → verificar limpieza
-- [ ] Task 3.5: Compilar resultados en MATRIX.md
-
----
-
-## 🌍 Pruebas Multidistro de `00_instalar_ansible.sh`
-
-**Objetivo**: Validar que `00_instalar_ansible.sh` funciona en todas las distros soportadas (2 últimas versiones estables de cada una).
-
-### Distros y Versiones a Probar
-
-| Distro | Versiones | Tipo | Estado |
-|--------|-----------|------|--------|
-| Ubuntu | 24.04 LTS, 26.04 | LTS + Latest | ⏳ PENDIENTE |
-| Debian | 12 (Bookworm), 13 (Trixie) | Stable, Testing | ⏳ PENDIENTE |
-| Rocky Linux | 9.x, 10.x | Stable | ⏳ PENDIENTE |
-| Fedora | 40, 41 | Latest releases | ⏳ PENDIENTE |
-| openSUSE | Leap 16.0, Tumbleweed | Stable, Rolling | ⏳ PENDIENTE |
-
-**Total**: 10 pruebas (5 distros × 2 versiones)
-
-### Fases de Ejecución
-
-#### Fase A: Setup Infraestructura
-- [ ] Identificar/crear VMs LXD para cada distro (10 VMs)
-- [ ] Instalar herramientas base en cada VM (git, curl, etc.)
-- [ ] Preparar script de captura de logs (`multidistro_test.sh`)
-
-#### Fase B: Ejecución de Pruebas
-- [ ] Ejecutar `00_instalar_ansible.sh` en cada VM
-- [ ] Capturar: exit code, duración, logs de error
-- [ ] Verificar: Ansible, kubectl, helm instalados
-
-#### Fase C: Documentación
-- [ ] Compilar resultados en `MATRIX.md::Pruebas Multidistro`
-- [ ] Identificar problemas específicos por distro
-- [ ] Documentar workarounds si es necesario
-
-### Criterios de Éxito
-
-Para cada distro, el script debe:
-1. ✅ **Instalar Ansible** vía pipx con colecciones inyectadas
-2. ✅ **Instalar kubectl** (binario oficial)
-3. ✅ **Instalar helm** (binario oficial)
-4. ✅ **Exit code 0** (éxito total, sin errores)
-5. ✅ **Verificaciones funcionales**: `ansible-playbook --version`, `kubectl version --client`, `helm version`
-
----
+- `test_matrix_runner.sh` capturaba siempre `exit=0` de `run_all.sh` (el `|| true` que evitaba
+  abortar bajo `set -e` también enmascaraba cualquier fallo real) — corregido con `if/then/else`.
+- El contador de cambios usaba `grep -c "changed=1"` (substring), perdiendo `changed=2`, `changed=8`,
+  etc. — corregido con una suma real vía `awk` sobre cada `PLAY RECAP`.
+- La condición de "idempotencia confirmada" no comprobaba `failed_N -eq 0`, solo el número de
+  cambios — corregido.
+- `test_multidistro()` era una simulación hardcodeada (nunca lanzaba contenedores reales) —
+  reemplazada por una implementación real que delega en el harness ya existente y mantenido
+  `../scripts/test_instalar_ansible_distros.sh`.
 
 ---
 
@@ -133,7 +47,7 @@ Para cada distro, el script debe:
  - **[PRIORITARIO]** Revisar la instalación de Longhorn (`03_k8s_ha_almacenamiento_persistente_longhorn/03_configurar_os.yml`): usa `ansible.builtin.apt` a pelo para instalar `open-iscsi`/`nfs-common` — solo funciona en Ubuntu/Debian. Generalizar igual que se acaba de hacer en `00_bootstrap_host_lxd.yml` (despachar por `ansible_facts.os_family`/`ansible.builtin.package`, con los nombres de paquete equivalentes en Rocky/Fedora — `iscsi-initiator-utils`/`nfs-utils` — y openSUSE — `open-iscsi`/`nfs-client`, a verificar en vivo, no asumir). Revisar también si el mismo patrón de `apt` hardcodeado aparece en otros labs que dependan de Longhorn (04, 05 y posteriores que lo reutilizan vía `import_playbook`).
  - Que se usan siempre los modulos más idempotentes: sobre todo los de k8s y helm
  - en los ejemplos 02 03 04 y 05 hay que meter playbook que permitan añadir un nuevo nodo al cluster y otro para quitarlo de manera segura. en el caso de el 03 04 y 05 deben de ser a parte un nodo de almancenamiento. tambien deberemos meter la manera de quitar un nodo de almacenamiento.
- - Se ha subido `kube_vip_image` de `v0.8.9` a `v1.2.1` (salto de versión mayor) en los escenarios 02-08 (todos los que usan kube-vip). Solo se ha vuelto a probar el arranque HA con la nueva versión en el escenario 08 (en curso). Pendiente revisar/volver a probar el arranque de kube-vip v1.2.1 en los escenarios 02, 03, 04, 05, 06 y 07.
+ - `kube_vip_image` en `v1.2.1` (subido desde `v0.8.9`) — arranque HA re-probado con éxito en 2026-08-09 en los escenarios 02, 03, 06, 07, 09, 10, 11, 12, 14 (incluye el failover explícito de VIP en el 02). Pendiente solo en 04, 05 y 08 (re-test en curso/pendiente tras fixes de esta misma sesión, ver [`MATRIX.md`](MATRIX.md)).
  - Desplegar Headlamp lo antes posible dentro de cada laboratorio (justo después de que el clúster esté formado y el CNI funcionando, antes del resto de despliegues específicos del lab) para poder seguir desde la consola web el resto de despliegues a medida que se ejecutan. Aplicado ya en todos los laboratorios (01-10); renumerados los playbooks afectados en cada uno. Pendiente volver a probar labs 01-07 con el nuevo orden (no re-ejecutados tras el cambio, salvo comprobación de que la renumeración es consistente).
  - Se ha añadido una variable de versión explícita en `group_vars` para todo el software de plataforma Kubernetes en todos los laboratorios (charts de Helm: Headlamp, Longhorn, MetalLB, NGINX Ingress, kube-prometheus-stack, Loki/Promtail, Rook Ceph, ceph-csi-operator, Percona, Cilium; e imágenes clave como `quay.io/ceph/ceph`), en vez de dejar que cada `helm install` tome silenciosamente "lo último disponible" en cada ejecución. No se ha vuelto a probar el arranque completo de los laboratorios 01-07 con las versiones ahora fijadas explícitamente (antes no fijadas) — pendiente de revalidación.
 
