@@ -19,8 +19,8 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 10 | ✅ Validado (VMs reales) | exit=0, 873s, failed=0 | exit=0, 120s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
 | 11 | ✅ Validado (VMs reales) | exit=0, 644s, failed=0 | exit=0, 117s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
 | 12 | ✅ Validado (VMs reales) | exit=0, 573s, failed=0 | exit=0, 122s, changed=4 real, failed=0 | El runner reportó "❌ falló" por un bug transitorio propio (ver nota), no del lab |
-| 13 | ⏳ En cola | — | — | — |
-| 14 | ⏳ En cola | — | — | — |
+| 13 | ❌ **FALLO REAL** | exit=0(*), 1711s, failed=1 | exit=0(*), 1362s, failed=1 | Clúster MongoDB nunca llega a "ready" — ver detalle abajo. (*) exit engañoso, ver bug del framework |
+| 14 | ⏳ En ejecución | — | — | — |
 | Multidistro | ❌ No implementado | — | — | `test_multidistro()` es una simulación hardcodeada, no ejecuta nada real |
 
 ---
@@ -136,6 +136,45 @@ fallo de idempotencia real.
 `logs/sequence_remaining_progress.log` para este lab es un falso negativo del framework de test
 (editado mientras ejecutaba), no un fallo real del laboratorio. Confirmado que Lab 13 (arrancado a
 las 14:20:13, después de que la edición ya estuviera guardada) no sufre este problema.
+
+---
+
+## ❌ Lab 13 — FALLO REAL (Percona MongoDB, Sharding)
+
+**Ejecución**: `logs/labs/20260809_142013_lab13_*` (post-bootstrap, cluster HA real 3 managers + 6 workers)
+
+**El clúster MongoDB (2 shards de 3 réplicas + config servers + mongos) nunca alcanza el estado
+`ready`**, en ninguna de las dos pasadas:
+
+- Pass 1 (1711s): tras 80 reintentos × 15s (20 min) esperando, `perconaservermongodb` reporta
+  `status.state = "error"`. El play falla (`failed=1`) y **`run_all.sh` se detiene ahí mismo** — el
+  log termina justo después del fallo, no llega a ejecutar el resto de tareas de ese playbook.
+- Pass 2 (1362s): mismo timeout agotado, esta vez con `status.state = "initializing"` (no llega a
+  progresar más allá de esa fase tampoco). Reproducible, no parece un fallo puntual/transitorio.
+
+El propio `inventory.ini` de este lab ya documenta que es el más exigente de recursos de toda la
+serie (`lxd_cpu=3`, `lxd_disk=32GB` por worker, subidos deliberadamente tras observar en vivo Pods
+en `Pending` por CPU insuficiente y volúmenes Longhorn en `faulted`). Con los valores actuales del
+`inventory.ini` **el problema persiste** — sugiere que el ajuste de recursos hecho en su momento no
+fue suficiente, o hay una causa distinta (posible carrera entre los 2 shards arrancando a la vez,
+límites de recursos del propio Percona Operator, etc.). **Pendiente de investigación dedicada.**
+
+### 🔎 Además: esto reveló dos bugs adicionales del framework de test
+
+1. **`exit_1`/`exit_2` no reflejan el resultado real**: `(cmd) || true; local exit_N=$?` hace que
+   `$?` sea **siempre 0** (el `|| true` absorbe cualquier fallo de la subshell). El runner mostró
+   "Exit: 0" en ambas pasadas de Lab 13 pese a que `run_all.sh` abortó por un fallo real. Este bug
+   afecta a **todos** los labs testeados en esta sesión — en el resto no importó porque se verificó
+   `failed=0` a mano en cada log completo, pero el campo "exit_code" de `results.csv` y el summary
+   nunca ha sido fiable como señal de éxito/fracaso.
+2. **La condición de "IDEMPOTENCIA CONFIRMADA" no comprueba `failed_2`**: solo mira
+   `[ "$changed_2" -lt 5 ]`. En Lab 13 el aviso de "incompleta" salió por pura coincidencia (el
+   `changed_2=5` no pasaba el umbral) — con un `changed_2` menor, el script habría anunciado
+   "IDEMPOTENCIA CONFIRMADA ✅" a pesar de un fallo real (`failed_2=1`).
+
+**Corrección pendiente** (se aplicará tras terminar la cola actual, para no repetir el incidente de
+edición en pleno vuelo que afectó a Lab 12): capturar el exit code real de `run_all.sh` sin `|| true`,
+y exigir `failed_N -eq 0` además de `changed_N < 5` para declarar idempotencia confirmada.
 
 ---
 
