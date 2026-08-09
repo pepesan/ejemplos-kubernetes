@@ -28,3 +28,6 @@ ceph_csi_chart_version: "1.0.4"
 
 # Tamaño del PVC de prueba usado para verificar la persistencia
 ceph_externo_test_pvc_size: "1Gi"
+
+# Imágenes de contenedor para verificación de persistencia
+test_alpine_image: "alpine:3.21"

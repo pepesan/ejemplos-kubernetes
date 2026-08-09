@@ -65,7 +65,7 @@
                 spec:
                   containers:
                   - name: writer
-                    image: alpine
+                    image: "{{ test_alpine_image }}"
                     command: ["/bin/sh", "-c"]
                     args:
                     - >

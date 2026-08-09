@@ -28,7 +28,7 @@
                 spec:
                   containers:
                     - name: grpcbin
-                      image: kong/grpcbin
+                      image: "{{ grpc_demo_image }}"
                       ports:
                         - containerPort: 9000
           - apiVersion: v1

@@ -28,3 +28,6 @@ longhorn_chart_version: "1.12.0"
 
 # Tamaño del PVC de prueba usado para verificar la persistencia RWX
 longhorn_test_pvc_size: "1Gi"
+
+# Imágenes de contenedor para verificación de persistencia
+test_alpine_image: "alpine:3.21"

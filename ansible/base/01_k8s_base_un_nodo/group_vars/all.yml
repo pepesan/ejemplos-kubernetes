@@ -16,3 +16,7 @@ k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
 
 # Versión del chart de Headlamp
 headlamp_chart_version: "0.43.0"
+
+# Imágenes de contenedor para verificación básica de deployment (especificar versión, no latest)
+test_nginx_image: "nginx:1.31-alpine"
+test_alpine_image: "alpine:3.21"

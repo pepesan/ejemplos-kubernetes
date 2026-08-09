@@ -37,3 +37,7 @@ headlamp_chart_version: "0.43.0"
 # Versiones de los charts de MetalLB y NGINX Ingress Controller
 metallb_chart_version: "0.16.1"
 ingress_nginx_chart_version: "4.15.1"
+
+# Imágenes de contenedor para apps de demo (especificar versión, no latest)
+test_nginx_image: "nginx:1.31-alpine"
+test_busybox_image: "busybox:1.36.1"

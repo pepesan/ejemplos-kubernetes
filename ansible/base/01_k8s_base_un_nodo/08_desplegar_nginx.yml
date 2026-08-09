@@ -38,7 +38,7 @@
                 spec:
                   containers:
                   - name: nginx
-                    image: nginx:alpine
+                    image: "{{ test_nginx_image }}"
                     ports:
                     - containerPort: 80
           - apiVersion: v1

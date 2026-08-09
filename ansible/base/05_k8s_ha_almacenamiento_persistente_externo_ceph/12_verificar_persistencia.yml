@@ -58,7 +58,7 @@
           spec:
             containers:
               - name: writer
-                image: alpine
+                image: "{{ test_alpine_image }}"
                 command: ["/bin/sh", "-c", "echo 'Hola desde Ceph Externo en el pod' > /mnt/data/test.txt && sleep 3600"]
                 volumeMounts:
                   - name: my-volume

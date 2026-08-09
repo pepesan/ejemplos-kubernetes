@@ -45,3 +45,8 @@ gateway_base_domain: "gw.local"
 
 # Versión del chart de Headlamp
 headlamp_chart_version: "0.43.0"
+
+# Imágenes de contenedor para demo de Gateway API (especificar versión, no latest)
+test_nginx_image: "nginx:1.31-alpine"
+grpc_demo_image: "kong/grpcbin:0.5"
+grpcurl_version: "1.9.3"
