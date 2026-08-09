@@ -57,10 +57,19 @@ warning() {
 # ============================================================================
 
 test_multidistro() {
-  log "=========================================="
-  log "PRUEBAS MULTIDISTRO: 00_instalar_ansible.sh"
-  log "=========================================="
+  error "=========================================="
+  error "PRUEBAS MULTIDISTRO: NO IMPLEMENTADO"
+  error "=========================================="
+  error "Esta función nunca ejecuta nada real (requeriría Docker/Podman)."
+  error "Una versión anterior devolvía éxito hardcodeado (exit_code=0, ansible_ok=1,"
+  error "kubectl_ok=1, helm_ok=1) sin lanzar ningún contenedor — resultados ficticios."
+  error "Se ha desactivado para no volver a generar una tabla de resultados falsa."
+  error "Ver MATRIX.md para el detalle de este hallazgo (2026-08-09)."
+  return 1
+}
 
+# shellcheck disable=SC2317
+_test_multidistro_unimplemented() {
   # Definir matriz de distros
   declare -A distros=(
     [ubuntu_2404]="ubuntu:24.04"

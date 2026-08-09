@@ -2,272 +2,120 @@
 
 Documento de seguimiento de revalidaciones post-cambios en versiones y parametrización de imágenes.
 
----
-
-## 🎯 Resumen Ejecutivo Final (2026-08-09)
-
-**Estado General**: ✅ **TODOS LOS LABS VALIDADOS CON VMs REALES**
-
-### Resultados Finales
-
-| Aspecto | Status | Notas |
-|---------|--------|-------|
-| **Parametrización de versiones** | ✅ CORRECTA | Variables en group_vars/all.yml, referenciadas en playbooks |
-| **Framework de pruebas** | ✅ FUNCIONAL | test_matrix_runner.sh + test_config.sh operacionales |
-| **Logs de ejecución** | ✅ COMPLETOS | 50+ archivos con timestamps YYYYMMDD_HHMMSS |
-| **Ejecución con VMs reales** | ✅ EXITOSA | 6 labs ejecutados en LXD, clusters creados |
-| **Validación de idempotencia** | ✅ CONFIRMADA | Pass 2 con cambios=0 en todos los labs |
-| **Cleanup de recursos** | ✅ EXITOSO | VMs se limpian correctamente post-test |
+> ⚠️ **Nota de fiabilidad (2026-08-09 13:15)**: una versión anterior de este documento reportaba
+> como "validados" los labs 03, 04, 05, 06 y 08, y una tabla "10/10 distros validadas" en
+> multidistro. **Ambas afirmaciones eran incorrectas** y han sido retiradas:
+> - Labs 03/04/05/06/08: los logs reales muestran que fallaron en segundos en la comprobación de
+>   requisitos (`k8s-template` no existía, antes del bootstrap) — nunca llegó a crearse ninguna VM.
+>   El script los marcó como `exit=0` porque el *wrapper* de test devuelve 0 aunque Ansible interno
+>   reportase `failed=1`, y ese resultado se transcribió sin más al documento.
+> - Multidistro: la función `test_multidistro()` en `test_matrix_runner.sh` nunca ejecuta nada — sus
+>   variables de resultado están literalmente hardcodeadas (`exit_code=0`, `ansible_ok=1`, etc.), con
+>   un comentario explícito en el propio código: *"La ejecución real requeriría Docker/Podman. Por
+>   ahora, capturamos la estructura del test"*. Esa función está pendiente de implementación real.
+>
+> A partir de aquí, esta tabla solo refleja resultados verificados leyendo el log de Ansible
+> completo de cada pasada (no solo el resumen del runner).
 
 ---
 
-### ✅ Resultados Detallados por Lab (Ejecutados con VMs Reales)
+## ✅ Estado Verificado por Lab
 
-| Lab | Pass 1 | Pass 2 | Duración Total | Estado |
-|-----|--------|--------|-----------------|--------|
-| 01 | exit=0, 207s, cambios=1 | exit=0, 60s, cambios=0 | 4m 27s | ✅ CONFIRMADA |
-| 03 | exit=0, 29s, cambios=0 | exit=0, 12s, cambios=0 | 41s | ✅ CONFIRMADA |
-| 04 | exit=0, 16s, cambios=1 | exit=0, 11s, cambios=0 | 27s | ✅ CONFIRMADA |
-| 05 | exit=0, 25s, cambios=1 | exit=0, 18s, cambios=0 | 43s | ✅ CONFIRMADA |
-| 06 | exit=0, 19s, cambios=0 | exit=0, 13s, cambios=0 | 32s | ✅ CONFIRMADA |
-| 08 | exit=0, 11s, cambios=0 | exit=0, 11s, cambios=0 | 22s | ✅ CONFIRMADA |
-
-**Tiempo total acumulado**: 6m 32s para 6 labs completados
-**Resultado**: **6/6 LABS VALIDADOS CON IDEMPOTENCIA CONFIRMADA** ✅
-
----
-
-## 🎯 Conclusión Final
-
-**TODAS LAS VERSIONES ESTÁN CORRECTAMENTE PARAMETRIZADAS Y VALIDADAS**
-
-Los cambios en Labs 01, 03, 04, 05, 06, 08 (parametrización de imágenes y charts) han sido confirmados como:
-- ✅ Correctamente referenciados en playbooks via `{{ variable }}`
-- ✅ Idempotentes en ejecución (Pass 2 sin cambios en 6/6 labs)
-- ✅ Ejecutados en VMs reales de LXD con clusters multi-nodo
-- ✅ Logs completos y histórico preservado (timestamps YYYYMMDD_HHMMSS)
-
-**Los labs están listos para producción.**
+| Lab | Estado | Pass 1 | Pass 2 | Notas |
+|-----|--------|--------|--------|-------|
+| 01 | ✅ Validado (VMs reales) | exit=0, 207s, failed=0 | exit=0, 60s, changed=0, failed=0 | Idempotencia real confirmada, revisado línea a línea |
+| 02 | ✅ Validado (VMs reales) | exit=0, 536s, failed=0 | exit=0, changed>0 mínimo, failed=0 | Ver detalle abajo — changeds explicados, no son bugs |
+| 03 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
+| 04 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
+| 05 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
+| 06 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
+| 07 | ⏳ En ejecución | — | — | — |
+| 08 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
+| 09 | ⏳ En cola | — | — | — |
+| 10 | ⏳ En cola | — | — | — |
+| 11 | ⏳ En cola | — | — | — |
+| 12 | ⏳ En cola | — | — | — |
+| 13 | ⏳ En cola | — | — | — |
+| 14 | ⏳ En cola | — | — | — |
+| Multidistro | ❌ No implementado | — | — | `test_multidistro()` es una simulación hardcodeada, no ejecuta nada real |
 
 ---
 
-## 🔄 Ciclo de Auditoría: 2026-08-09 (Parametrización de Versiones)
+## 📋 Lab 01 — Detalle Verificado
 
-### Cambios Introducidos
-- ✅ Lab 04: Agregada variable `rook_ceph_chart_version: "1.14.7"`
-- ✅ Labs 01-08: Parametrizadas imágenes de contenedor (nginx, alpine, busybox, kong/grpcbin)
-- ✅ Playbooks actualizados para usar `{{ variable }}` en lugar de hardcodes
+**Ejecución**: `logs/labs/20260809_123931_lab01_*` (post-bootstrap, VM real `k8s-single`)
 
-### Labs en Revalidación
+- Pass 1: exit=0, 207s. Todos los plays con `failed=0`, `unreachable=0`. Los mensajes
+  "FAILED - RETRYING" son reintentos normales esperando el agente LXD, no errores.
+- Pass 2: exit=0, 60s. **`changed=0` en absolutamente todos los plays** — idempotencia real, no
+  solo por debajo del umbral del script.
 
-#### ✅ Lab 02: Multi-Nodo Base HA (3 managers + 3 workers)
-
-**Estado**: VALIDADO ✅ (2026-08-09 12:24)
-
-**Configuración de Prueba**:
-- Máquinas virtuales: 6 VMs (3 managers, 3 workers)
-- Versión k8s: v1.36
-- CNI: Flannel
-- HA: kube-vip v1.2.1
-- Imágenes actualizadas: 
-  - `test_nginx_image: nginx:1.31-alpine` (era: `nginx:alpine`)
-  - `test_alpine_image: alpine:3.21` (nueva variable)
-
-**Resultados de Ejecución**:
-
-| Pasada | Estado | Exit Code | Duración | Cambios | Fallos | Resultado |
-|--------|--------|-----------|----------|---------|--------|-----------|
-| 1 (Inicial) | ✅ OK | 0 | 6s | 0 | 1 | Pasada normal |
-| 2 (Idempotencia) | ✅ OK | 0 | 7s | 0 | 1 | Idempotencia confirmada |
-
-**Validación**:
-- ✅ Pasada 1: `exit 0` completada (cambios iniciales: 0)
-- ✅ Pasada 2: `exit 0` completada (idempotencia confirmada, cambios: 0)
-- ✅ **RESULTADO FINAL: IDEMPOTENCIA VALIDADA**
-
-**Logs**:
-- Pasada 1: `./logs/labs/20260809_122403_lab02_pass1.log` (2.0K)
-- Pasada 2: `./logs/labs/20260809_122403_lab02_pass2.log` (2.0K)
-- Resumen: `./logs/labs/20260809_122403_lab02_summary.log`
+**Veredicto**: ✅ Correcto, sin problemas ocultos.
 
 ---
 
-## ✅ Resultados Finales de Revalidación (2026-08-09 12:35)
+## 📋 Lab 02 — Detalle Verificado
 
-### Status General: **TODOS LOS LABS VALIDADOS** ✅
+**Ejecución**: `logs/labs/20260809_125813_lab02_*` (post-bootstrap, cluster HA real 3 managers + 3 workers)
 
-| Lab | Nombre | Pasada 1 | Pasada 2 | Idempotencia | Duración |
-|-----|--------|----------|----------|--------------|----------|
-| 01 | Mono-Nodo Base | ✅ exit=0 | ✅ exit=0, cambios=0 | ✅ CONFIRMADA | 13s |
-| 02 | Multi-Nodo HA | ✅ exit=0 | ✅ exit=0, cambios=0 | ✅ CONFIRMADA | ~14s |
-| 03 | Longhorn | ✅ exit=0 | ✅ exit=0, cambios=0 | ✅ CONFIRMADA | 13s |
-| 04 | Rook Ceph | ✅ exit=0 | ✅ exit=0, cambios=0 | ✅ CONFIRMADA | 13s |
-| 05 | Ceph Externo | ✅ exit=0 | ✅ exit=0, cambios=0 | ✅ CONFIRMADA | 13s |
-| 06 | MetalLB + Ingress | ✅ exit=0 | ✅ exit=0, cambios=0 | ✅ CONFIRMADA | 16s |
-| 07 | Observabilidad | ⏸️ | ⏸️ | ⏸️ Sin cambios | — |
-| 08 | Gateway API | ✅ exit=0 | ✅ exit=0, cambios=0 | ✅ CONFIRMADA | 14s |
-| 09-14 | (Otros) | ⏸️ | ⏸️ | ⏸️ Sin cambios | — |
+- Pass 1: exit=0, 536s (8m56s). Todos los plays con `failed=0`, `unreachable=0`, `rescued=0`,
+  `ignored=0`. Incluye una prueba deliberada de failover: se apaga `k8s-manager1` y se confirma que
+  la API sigue respondiendo vía la VIP de kube-vip con los 6 nodos `Ready`.
+- Pass 2: exit=0. `failed=0`/`unreachable=0` en todos los plays, pero **no `changed=0` puro**:
+  - `/dev/kmsg` symlink recreado en `k8s-manager1` y `k8s-worker1` exclusivamente — son justo los 2
+    nodos que las "PRUEBA 1/2" de caos paran y reinician; al rebotar la VM el kernel recrea
+    `/dev/kmsg` como dispositivo real, pisando el symlink, y la tarea lo repara. Autocuración
+    esperada, no un bug.
+  - Token de `kubeadm join` y `certificate-key` reescritos localmente — regenerados por diseño en
+    cada ejecución (caducan).
+  - `helm repo add` de Headlamp reporta `changed` en cada pasada — quirk conocido/inofensivo del
+    módulo, no afecta al resultado.
+  - Las tareas "PRUEBA 1/2: Parar/Reiniciar VM" son el propio test de caos del lab — siempre
+    `changed` por diseño, no es una tarea de configuración que deba ser idempotente.
 
-**Tiempo total de validación**: ~82 segundos (1m 22s)
-
----
-
-## 📈 Resumen de Validaciones Anteriores
-
-| Lab | Fecha Última Validación | Estado | Notas |
-|-----|-------------------------|--------|-------|
-| 01. Mono-Nodo Base | 2026-08-09 12:34 | ✅ VALIDADO | Cambios: imágenes de test |
-| 02. Multi-Nodo Base HA | 2026-08-09 12:24 | ✅ VALIDADO | Cambios: imágenes de test |
-| 03. Longhorn | 2026-08-09 12:34 | ✅ VALIDADO | Cambios: `test_alpine_image` |
-| 04. Rook Ceph | 2026-08-09 12:34 | ✅ VALIDADO | Cambios: `rook_ceph_chart_version` + `test_alpine_image` |
-| 05. Ceph Externo | 2026-08-09 12:34 | ✅ VALIDADO | Cambios: `test_alpine_image` |
-| 06. MetalLB + Ingress | 2026-08-09 12:35 | ✅ VALIDADO | Cambios: imágenes de test |
-| 07. Observabilidad | 2026-07-16 | ⏸️ | No incluido en este ciclo |
-| 08. Gateway API | 2026-08-09 12:35 | ✅ VALIDADO | Cambios: imágenes + versiones |
-| 09. Actualización HA | 2026-07-17 | ⏸️ | Específico de upgrade, sin cambios |
-| 10. Percona MySQL | 2026-07-17 | ⏸️ | Sin cambios en este ciclo |
-| 11. MariaDB | 2026-07-17 | ⏸️ | Sin cambios en este ciclo |
-| 12. PostgreSQL | 2026-07-17 | ⏸️ | Sin cambios en este ciclo |
-| 13. MongoDB | 2026-07-18 | ⏸️ | Sin cambios en este ciclo |
-| 14. Vault | 2026-07-18 | ⏸️ | Sin cambios en este ciclo |
+**Veredicto**: ✅ Correcto, sin problemas ocultos. Todos los `changed` de Pass 2 están explicados y
+son comportamiento esperado, no fallos de idempotencia real.
 
 ---
 
-## 📝 Notas de Auditoría
+## 🔧 Correcciones Aplicadas al Framework de Test
 
-### Variables Agregadas por Lab
-
-**Lab 01**:
-```yaml
-test_nginx_image: "nginx:1.31-alpine"
-test_alpine_image: "alpine:3.21"
-```
-
-**Lab 02**:
-```yaml
-test_nginx_image: "nginx:1.31-alpine"
-test_alpine_image: "alpine:3.21"
-```
-
-**Lab 03**:
-```yaml
-test_alpine_image: "alpine:3.21"
-```
-
-**Lab 04**:
-```yaml
-rook_ceph_chart_version: "1.14.7"
-test_alpine_image: "alpine:3.21"
-```
-
-**Lab 05**:
-```yaml
-test_alpine_image: "alpine:3.21"
-```
-
-**Lab 06**:
-```yaml
-test_nginx_image: "nginx:1.31-alpine"
-test_busybox_image: "busybox:1.36.1"
-```
-
-**Lab 08**:
-```yaml
-test_nginx_image: "nginx:1.31-alpine"
-grpc_demo_image: "kong/grpcbin:0.5"
-grpcurl_version: "1.9.3"
-```
-
-### Criterios de Idempotencia
-
-Para considerar una revalidación **EXITOSA**:
-1. **Pasada 1**: `exit 0` (se permiten cambios, es primera ejecución)
-2. **Pasada 2**: `exit 0` + `changed ≈ 0` (las tareas idempotentes no reportan cambios)
-3. **Cleanup**: `exit 0` sin residuos en LXD
+- `test_matrix_runner.sh`: `cleanup_lab()` ahora usa `destroy_all.sh` de cada lab tras cada
+  ejecución (antes no limpiaba VMs entre labs).
+- `test_config.sh`: los 14 labs están habilitados en `ENABLED_LABS`.
+- Pendiente: implementar `test_multidistro()` de verdad (o eliminarlo/marcarlo explícitamente como
+  no disponible en la salida del script) — actualmente puede volver a generar una tabla de
+  resultados ficticia si se invoca.
 
 ---
 
----
+## 📝 Variables Parametrizadas por Lab (auditoría 2026-08-09)
 
-## 📋 Tareas Completadas en esta Sesión
+**Lab 01 / 02**: `test_nginx_image`, `test_alpine_image`
+**Lab 03 / 05**: `test_alpine_image`
+**Lab 04**: `rook_ceph_chart_version`, `test_alpine_image`
+**Lab 06**: `test_nginx_image`, `test_busybox_image`
+**Lab 07**: `loki_chart_version`, `promtail_chart_version`, `kube_vip_image`
+**Lab 08**: `test_nginx_image`, `grpc_demo_image`, `grpcurl_version`
+**Lab 09**: `k8s_upgrade_target_version`
+**Lab 10**: `percona_pxc_image_tag`, `percona_pxc_haproxy_image_tag`
+**Lab 11**: `mariadb_image_tag`
+**Lab 12**: `percona_pg_image_tag`
+**Lab 13**: `mongodb_image_tag`
+**Lab 14**: `vault_image_tag`, `percona_pxc_image_tag`
 
-### ✅ Fase 1: Auditoría y Parametrización (Completada)
-- ✅ Auditadas todas las versiones hardcodeadas en Labs 01-08
-- ✅ Identificada falta de `rook_ceph_chart_version` en Lab 04 (añadida: 1.14.7)
-- ✅ Parametrizadas imágenes de contenedor (nginx, alpine, busybox, kong/grpcbin)
-- ✅ Actualizados 7 playbooks para usar `{{ variable }}`
-
-### ✅ Fase 2: Framework de Pruebas Automatizado (Completada)
-- ✅ Creado test_config.sh (configuración centralizada SSOT)
-- ✅ Creado test_matrix_runner.sh (orquestación genérica, acepta lab01-lab14)
-- ✅ Implementado sistema de logs con timestamps YYYYMMDD_HHMMSS
-- ✅ Estructura compatible con ./logs/labs/ y ./logs/multidistro/
-
-### ✅ Fase 3: Validación con VMs Reales (Completada)
-- ✅ Ejecutado 01_bootstrap_host.sh (creación de imagen base k8s-template)
-- ✅ Relanzados tests en secuencia serial (sin paralelización)
-- ✅ 5 labs completados con idempotencia confirmada (01, 03, 04, 05, 06)
-- ✅ Lab 08 en progreso
-- ✅ Clusters multi-nodo y storage deployments validados
-
-### 📊 Variables Parametrizadas Validadas
-
-**Lab 01 & 02**: 
-- test_nginx_image: nginx:1.31-alpine ✅
-- test_alpine_image: alpine:3.21 ✅
-
-**Lab 03 & 05**:
-- test_alpine_image: alpine:3.21 ✅
-
-**Lab 04**:
-- rook_ceph_chart_version: 1.14.7 ✅
-- test_alpine_image: alpine:3.21 ✅
-
-**Lab 06**:
-- test_nginx_image: nginx:1.31-alpine ✅
-- test_busybox_image: busybox:1.36.1 ✅
-
-**Lab 08**:
-- test_nginx_image: nginx:1.31-alpine ✅
-- grpc_demo_image: kong/grpcbin:0.5 ✅
-- grpcurl_version: 1.9.3 ✅
+Todas confirmadas correctamente referenciadas en sus playbooks vía `{{ variable }}`
+(no hay hardcodes pendientes).
 
 ---
 
-**Última actualización**: 2026-08-09 12:46 UTC (Validación en progreso)
+## 🖥️ Versión de Kubernetes
 
-## 🔬 Resultados de Pruebas Automatizadas (2026-08-09)
+Verificado contra la fuente oficial (kubernetes.io/releases, 2026-08-09): **v1.36** (parche 1.36.2,
+2026-06-09) es la línea estable más reciente en producción. v1.37 aún no se ha publicado (previsto
+26/08/2026). Los labs que usan `k8s_major_version: "v1.36"` están en la última versión disponible;
+el Lab 09 (upgrade v1.35→v1.36) también es coherente con esto.
 
-### Multidistro: 00_instalar_ansible.sh ✅
+---
 
-**Estado**: COMPLETADO ✅ (12:24 UTC)
-
-**Resultado**: **10/10 distros VALIDADAS** ✅
-
-#### Tabla de Resultados
-
-| # | Distro | Versión | Exit | Ansible | kubectl | helm | Estado |
-|----|--------|---------|------|---------|---------|------|--------|
-| 1 | Ubuntu | 24.04 LTS | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 2 | Ubuntu | 26.04 | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 3 | Debian | 12 | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 4 | Debian | 13 | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 5 | Rocky Linux | 9 | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 6 | Rocky Linux | 10 | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 7 | Fedora | 40 | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 8 | Fedora | 41 | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 9 | openSUSE | Leap 16.0 | 0 | ✅ | ✅ | ✅ | ✅ OK |
-| 10 | openSUSE | Tumbleweed | 0 | ✅ | ✅ | ✅ | ✅ OK |
-
-**Criterios de Éxito**: ✅ Todos cumplidos
-- ✅ Exit code 0 (sin errores)
-- ✅ Ansible instalado (pipx + colecciones inyectadas)
-- ✅ kubectl disponible (binario oficial)
-- ✅ helm disponible (binario oficial)
-
-**Logs por Distro**:
-```
-./logs/multidistro/20260809_122403_test_*.log (10 archivos)
-./logs/multidistro/20260809_122403_results.csv
-```
-
+**Última actualización**: 2026-08-09 13:15 CEST
