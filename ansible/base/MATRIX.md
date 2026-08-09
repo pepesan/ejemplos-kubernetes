@@ -14,7 +14,7 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 05 | ✅ Validado, con matices | exit=0, 838s, failed=0 | exit=0, 156s, changed=9 real, failed=0 | Funcionalmente correcto; 3 tareas con `changed` evitable — ver detalle |
 | 06 | ✅ Validado (VMs reales) | exit=0, 393s, failed=0 | exit=0, 112s, changed=3 real, failed=0 | Primera validación genuina — patrón benigno estándar |
 | 07 | ✅ Validado (VMs reales) | exit=0, 598s, failed=0 | exit=0, 111s, changed=3 total, failed=0 | Ver detalle abajo — mismos patrones que Lab 02, no son bugs |
-| 08 | ⏳ En cola | — | — | — |
+| 08 | ❌ **FALLO REAL (corregido)** | exit=2, 588s, failed=1 | — (no llegó a Pass 2) | Imagen `kong/grpcbin:0.5` inexistente — ver detalle abajo. Corregido, pendiente re-test |
 | 09 | ✅ Validado (VMs reales) | exit=0, 665s, failed=0 | exit=0, 204s, changed=55 real (no bug, ver detalle) | Upgrade kubeadm — changed alto es esperado por diseño |
 | 10 | ✅ Validado (VMs reales) | exit=0, 873s, failed=0 | exit=0, 120s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
 | 11 | ✅ Validado (VMs reales) | exit=0, 644s, failed=0 | exit=0, 117s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
@@ -135,6 +135,40 @@ playbook (creación real de OSDs, PVCs de prueba RBD/CephFS) funciona correctame
 persistencia RBD externa funcionan; `failed=0` en ambas pasadas). Los 6 `changed` de Ceph (SSH key
 + host add) son mejoras de idempotencia deseables pero no bloqueantes — candidatos a
 `changed_when` más precisos en una sesión futura, no urgente.
+
+---
+
+## ❌ Lab 08 — FALLO REAL (encontrado, corregido, pendiente re-test)
+
+**Ejecución**: `logs/labs/20260809_163229_lab08_pass1.log`
+
+Pass 1 abortó de verdad (exit real=2). El Deployment `demo-grpc` nunca llegó a estar disponible
+(0 de 2 réplicas tras 3 minutos de timeout):
+
+```
+fatal: [localhost]: FAILED! => {"...": "...", "stdout": "Waiting for deployment \"demo-grpc\"
+rollout to finish: 0 of 2 updated replicas are available...", "stderr": "error: timed out
+waiting for the condition"}
+```
+
+**Causa raíz**: **bug propio, introducido en la auditoría de parametrización de esta misma
+sesión**. Se fijó `grpc_demo_image: "kong/grpcbin:0.5"`, pero ese tag **no existe** en Docker Hub
+— verificado con `docker manifest inspect kong/grpcbin:0.5` → `no such manifest`. El repositorio
+`kong/grpcbin` solo publica el tag `latest` (confirmado consultando la API de Docker Hub:
+`hub.docker.com/v2/repositories/kong/grpcbin/tags` devuelve únicamente `["latest"]`), así que el
+pod nunca arrancaba (imagen inexistente → `ImagePullBackOff`, deployment nunca listo).
+
+**Fix aplicado**: como no hay tags de versión reales que fijar, se fija por **digest** (inmutable,
+mejor incluso que un tag para evitar drift) en vez de usar `latest` sin más:
+```yaml
+grpc_demo_image: "kong/grpcbin@sha256:5c4ed955048613ae88701550a3844a13788934e36fdf1692f33194d8792c9b1e"
+```
+Digest obtenido con `docker buildx imagetools inspect kong/grpcbin:latest` (2026-08-09),
+verificado como sha256 válido de 64 caracteres hex. Kubernetes admite nativamente
+`image: repo@sha256:...`, confirmado en el uso real del playbook
+(`14_desplegar_grpc.yml:31`).
+
+**Estado**: pendiente de re-test para confirmar que el fix resuelve el problema.
 
 ---
 

@@ -48,5 +48,9 @@ headlamp_chart_version: "0.43.0"
 
 # Imágenes de contenedor para demo de Gateway API (especificar versión, no latest)
 test_nginx_image: "nginx:1.31-alpine"
-grpc_demo_image: "kong/grpcbin:0.5"
+# kong/grpcbin no publica tags de versión (solo "latest") — se fija por digest en vez
+# de tag para tener algo inmutable/reproducible. El tag "0.5" usado antes no existe
+# en el registro (docker.io/kong/grpcbin), causaba ImagePullBackOff/rollout nunca listo.
+# Digest obtenido con: docker buildx imagetools inspect kong/grpcbin:latest (2026-08-09).
+grpc_demo_image: "kong/grpcbin@sha256:5c4ed955048613ae88701550a3844a13788934e36fdf1692f33194d8792c9b1e"
 grpcurl_version: "1.9.3"
