@@ -38,6 +38,16 @@ Antes de empezar, solo debes asegurar estos tres requisitos básicos en tu máqu
      chmod +x 00_instalar_ansible.sh
      ./00_instalar_ansible.sh
      ```
+     
+     > [!TIP]
+     > **Validar `00_instalar_ansible.sh` en múltiples distros**: Para probar que el script
+     > funciona correctamente en Ubuntu, Debian, Rocky, Fedora y openSUSE, usa el framework
+     > de pruebas automatizado:
+     > ```bash
+     > ./test_matrix_runner.sh multidistro
+     > ```
+     > Esto ejecuta pruebas en 10 distros (5 × 2 versiones) y compila resultados en `MATRIX.md`.
+     > Ver [`TEST_FRAMEWORK.md`](TEST_FRAMEWORK.md) para más detalles.
 3. **Claves SSH:**
    - Debes disponer de una clave SSH pública en tu host (por ejemplo, `~/.ssh/id_ed25519.pub`). Se inyectará automáticamente en las VMs para permitir que Ansible se conecte sin contraseña.
    - Si no tienes claves SSH creadas en tu host, puedes generarlas con el comando:
@@ -60,6 +70,13 @@ Debian, Rocky Linux 9/10, Fedora y openSUSE Leap/Tumbleweed), verificado en vivo
 [`ansible/scripts/test_lxd_host_bootstrap_distros.sh`](../scripts/test_lxd_host_bootstrap_distros.sh)
 (la misma lógica, extraída como rol reutilizable en
 [`lxd_host_bootstrap`](../roles/lxd_host_bootstrap/)).
+
+Para validar que tu bootstrap de LXD funciona correctamente, ejecuta:
+```bash
+# Validar idempotencia del lab base (2 pasadas)
+./test_matrix_runner.sh lab02
+```
+Ver [`TEST_FRAMEWORK.md`](TEST_FRAMEWORK.md) para más opciones de testing.
 
 Este playbook realiza las siguientes acciones críticas:
 1.  **Instala utilidades base:** `snapd` (excepto en openSUSE, que no lo publica — ver más abajo) y `curl`.
@@ -98,6 +115,20 @@ Ejecuta el playbook indicando la opción `--ask-become-pass` para que Ansible pu
 ```bash
 ansible-playbook 00_bootstrap_host_lxd.yml --ask-become-pass
 ```
+
+### Validar el Setup Completo:
+
+Una vez completado el bootstrap, valida que todo está listo ejecutando el lab base (3 managers + 3 workers, 2 pasadas consecutivas para verificar idempotencia):
+
+```bash
+# Validar que Lab 02 Base HA funciona correctamente
+./test_matrix_runner.sh lab02
+
+# O ejecutar todas las pruebas (labs + multidistro)
+./test_matrix_runner.sh all
+```
+
+Los resultados se compilarán automáticamente en `./logs/` y en `MATRIX.md`. Ver [`TEST_FRAMEWORK.md`](TEST_FRAMEWORK.md) para el uso completo del framework de pruebas.
 
 O usa el script equivalente [`01_bootstrap_host.sh`](01_bootstrap_host.sh) de este directorio:
 ```bash

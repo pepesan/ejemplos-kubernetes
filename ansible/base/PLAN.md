@@ -4,6 +4,131 @@ Este archivo detalla la secuencia de laboratorios prácticos diseñados para ser
 
 ---
 
+## 📝 Tareas en Progreso (Auditoría de Versiones)
+
+Auditoría realizada 2026-08-09 para fijar **todas las versiones** (Helm charts, imágenes de contenedor, herramientas) como variables Ansible en `group_vars`, eliminando hardcodes en playbooks.
+
+### Problemas Encontrados
+
+#### 1. Lab 04 - Rook Ceph (CRÍTICO)
+- [ ] **Falta variable `rook_ceph_chart_version`** en `group_vars/all.yml`
+  - Playbook `10_desplegar_rook_ceph.yml` la referencia pero no está definida
+  - **Fix**: Agregar versión (comprobar última estable en `https://charts.rook.io/index.yaml`)
+- [ ] Revalidar Lab 04 con 2 pasadas consecutivas tras el fix
+
+#### 2. Imágenes Container Hardcodeadas (TODOS LOS LABS)
+Las siguientes imágenes están hardcodeadas en playbooks sin variable Ansible:
+- `nginx:alpine` → Labs 01, 02, 06, 08 (test apps)
+- `alpine` → Labs 03, 04, 05 (verificación)
+- `busybox:1.36` → Lab 06 (test)
+- `kong/grpcbin` → Lab 08 (gRPC demo, también versión)
+- `grpcurl` versión `1.9.3` en descarga (Lab 08)
+
+**Política**: Crear variables por lab para cada imagen:
+```yaml
+# group_vars/all.yml
+test_nginx_image: "nginx:alpine"
+test_alpine_image: "alpine:3.21"  # especificar versión
+test_busybox_image: "busybox:1.36"
+grpc_demo_image: "kong/grpcbin:0.5"
+grpcurl_version: "1.9.3"
+```
+
+#### 3. Hardcodes de APT sin Ramificación (Labs 02-05)
+**Contexto**: README.md dice multidistro, pero práctica es Ubuntu-only
+- Lab 02 (y heredados): `04_instalar_containerd.yml`, `05_instalar_k8s_tools.yml` usan `apt` + `deb822_repository` (Debian-only)
+- Lab 05: `03_configurar_os.yml` línea 76-92 (python3, lvm2), `10_desplegar_ceph_externo.yml` (cephadm)
+
+**Status**: Documentado pero NO se toca en este ciclo (se dejará como tech-debt, confirmado con usuario que "nodos guest siempre Ubuntu")
+
+### Tareas Ordenadas
+
+#### ✅ Fase 1: Fix Crítico Lab 04 (COMPLETADO)
+- [x] Task 1.1: Descubrir versión estable de rook-ceph chart → `1.14.7`
+- [x] Task 1.2: Agregar `rook_ceph_chart_version: "1.14.7"` a `04/group_vars/all.yml`
+- [ ] Task 1.3: Revalidar Lab 04 (2 pasadas `run_all.sh`) — **PENDIENTE EJECUCIÓN REAL**
+
+#### ✅ Fase 2: Parametrizar Imágenes Container (COMPLETADO)
+- [x] Task 2.1: Crear variables por lab para imágenes test
+  - Lab 01: `test_nginx_image`, `test_alpine_image`
+  - Lab 02: `test_nginx_image`, `test_alpine_image`
+  - Lab 03: `test_alpine_image`
+  - Lab 04: `test_alpine_image` (+ fix rook_ceph_chart_version arriba)
+  - Lab 05: `test_alpine_image`
+  - Lab 06: `test_nginx_image`, `test_busybox_image`
+  - Lab 08: `test_nginx_image`, `grpc_demo_image`, `grpcurl_version`
+
+- [x] Task 2.2: Reemplazar hardcodes en playbooks con `{{ variable }}`
+  - Lab 01: `08_desplegar_nginx.yml` → `nginx:alpine` → `{{ test_nginx_image }}`
+  - Lab 02: `10_despliegue_test.yml` → `nginx:alpine` → `{{ test_nginx_image }}`
+  - Lab 03: `11_verificar_persistencia_rwx.yml` → `alpine` → `{{ test_alpine_image }}`
+  - Lab 04: `11_verificar_rook_persistencia.yml` → `alpine` → `{{ test_alpine_image }}`
+  - Lab 05: `12_verificar_persistencia.yml` → `alpine` → `{{ test_alpine_image }}`
+  - Lab 06: `12_desplegar_apps_demo.yml` → `busybox:1.36` → `{{ test_busybox_image }}`
+  - Lab 08: `14_desplegar_grpc.yml` → `kong/grpcbin` → `{{ grpc_demo_image }}`
+
+- [x] Task 2.3: Versiones fijadas (sin `latest`)
+  - `nginx:1.31-alpine` (última versión 1.31.x)
+  - `alpine:3.21` (última versión estable)
+  - `busybox:1.36.1` (pinned a versión específica)
+  - `kong/grpcbin:0.5` (última versión oficial)
+  - `grpcurl v1.9.3` (herramienta)
+
+#### ⏳ Fase 3: Auditoría de Idempotencia de Labs (EN PROGRESO)
+- [x] Task 3.1: Seleccionar Lab 02 (base HA, heredado por todos)
+- [x] Task 3.2: Iniciada ejecución 1ª pasada (12:16 UTC)
+- [ ] Task 3.3: Ejecutar `run_all.sh` 2ª pasada (tras pasada 1)
+- [ ] Task 3.4: Ejecutar `destroy_all.sh` → verificar limpieza
+- [ ] Task 3.5: Compilar resultados en MATRIX.md
+
+---
+
+## 🌍 Pruebas Multidistro de `00_instalar_ansible.sh`
+
+**Objetivo**: Validar que `00_instalar_ansible.sh` funciona en todas las distros soportadas (2 últimas versiones estables de cada una).
+
+### Distros y Versiones a Probar
+
+| Distro | Versiones | Tipo | Estado |
+|--------|-----------|------|--------|
+| Ubuntu | 24.04 LTS, 26.04 | LTS + Latest | ⏳ PENDIENTE |
+| Debian | 12 (Bookworm), 13 (Trixie) | Stable, Testing | ⏳ PENDIENTE |
+| Rocky Linux | 9.x, 10.x | Stable | ⏳ PENDIENTE |
+| Fedora | 40, 41 | Latest releases | ⏳ PENDIENTE |
+| openSUSE | Leap 16.0, Tumbleweed | Stable, Rolling | ⏳ PENDIENTE |
+
+**Total**: 10 pruebas (5 distros × 2 versiones)
+
+### Fases de Ejecución
+
+#### Fase A: Setup Infraestructura
+- [ ] Identificar/crear VMs LXD para cada distro (10 VMs)
+- [ ] Instalar herramientas base en cada VM (git, curl, etc.)
+- [ ] Preparar script de captura de logs (`multidistro_test.sh`)
+
+#### Fase B: Ejecución de Pruebas
+- [ ] Ejecutar `00_instalar_ansible.sh` en cada VM
+- [ ] Capturar: exit code, duración, logs de error
+- [ ] Verificar: Ansible, kubectl, helm instalados
+
+#### Fase C: Documentación
+- [ ] Compilar resultados en `MATRIX.md::Pruebas Multidistro`
+- [ ] Identificar problemas específicos por distro
+- [ ] Documentar workarounds si es necesario
+
+### Criterios de Éxito
+
+Para cada distro, el script debe:
+1. ✅ **Instalar Ansible** vía pipx con colecciones inyectadas
+2. ✅ **Instalar kubectl** (binario oficial)
+3. ✅ **Instalar helm** (binario oficial)
+4. ✅ **Exit code 0** (éxito total, sin errores)
+5. ✅ **Verificaciones funcionales**: `ansible-playbook --version`, `kubectl version --client`, `helm version`
+
+---
+
+---
+
 ## Cosas a comprobar
  - **[PRIORITARIO]** Revisar la instalación de Longhorn (`03_k8s_ha_almacenamiento_persistente_longhorn/03_configurar_os.yml`): usa `ansible.builtin.apt` a pelo para instalar `open-iscsi`/`nfs-common` — solo funciona en Ubuntu/Debian. Generalizar igual que se acaba de hacer en `00_bootstrap_host_lxd.yml` (despachar por `ansible_facts.os_family`/`ansible.builtin.package`, con los nombres de paquete equivalentes en Rocky/Fedora — `iscsi-initiator-utils`/`nfs-utils` — y openSUSE — `open-iscsi`/`nfs-client`, a verificar en vivo, no asumir). Revisar también si el mismo patrón de `apt` hardcodeado aparece en otros labs que dependan de Longhorn (04, 05 y posteriores que lo reutilizan vía `import_playbook`).
  - Que se usan siempre los modulos más idempotentes: sobre todo los de k8s y helm
