@@ -192,6 +192,17 @@ test_lab_idempotence() {
 
   log "Ruta: $lab_path"
 
+  sum_recap_field() {
+    local file="$1" field="$2"
+    awk -v f="$field" '
+      match($0, f "=[0-9]+") {
+        split(substr($0, RSTART, RLENGTH), a, "=")
+        total += a[2]
+      }
+      END { print total + 0 }
+    ' "$file" 2>/dev/null
+  }
+
   # Crear archivos de log con timestamp
   local results_file="${LABS_LOG_DIR}/${TIMESTAMP}_lab${lab_num}_results.csv"
   local summary_file="${LABS_LOG_DIR}/${TIMESTAMP}_lab${lab_num}_summary.log"
@@ -213,12 +224,10 @@ test_lab_idempotence() {
   local end_1=$(date +%s)
   local duration_1=$((end_1 - start_1))
 
-  local changed_1=$(grep -c "changed=1" "$pass1_log" 2>/dev/null | tr -d '\n' || echo "0")
-  local failed_1=$(grep -c "failed=1" "$pass1_log" 2>/dev/null | tr -d '\n' || echo "0")
-
-  # Asegurar que son números válidos
-  changed_1=${changed_1:-0}
-  failed_1=${failed_1:-0}
+  # Suma real de los contadores de cada PLAY RECAP (no un grep de substring,
+  # que confundiría p.ej. "changed=8" con "changed=1" por prefijo compartido)
+  local changed_1=$(sum_recap_field "$pass1_log" "changed")
+  local failed_1=$(sum_recap_field "$pass1_log" "failed")
 
   echo "1,$exit_1,$duration_1,$changed_1,$failed_1,$([ $exit_1 -eq 0 ] && echo '✅ OK' || echo '❌ FAIL')" >> "$results_file"
   echo "Pass 1: exit=$exit_1, duration=${duration_1}s, changed=$changed_1, failed=$failed_1" >> "$summary_file"
@@ -240,12 +249,8 @@ test_lab_idempotence() {
     local end_2=$(date +%s)
     local duration_2=$((end_2 - start_2))
 
-    local changed_2=$(grep -c "changed=1" "$pass2_log" 2>/dev/null | tr -d '\n' || echo "0")
-    local failed_2=$(grep -c "failed=1" "$pass2_log" 2>/dev/null | tr -d '\n' || echo "0")
-
-    # Asegurar que son números válidos
-    changed_2=${changed_2:-0}
-    failed_2=${failed_2:-0}
+    local changed_2=$(sum_recap_field "$pass2_log" "changed")
+    local failed_2=$(sum_recap_field "$pass2_log" "failed")
 
     echo "2,$exit_2,$duration_2,$changed_2,$failed_2,$([ $exit_2 -eq 0 ] && echo '✅ OK' || echo '❌ FAIL')" >> "$results_file"
     echo "Pass 2: exit=$exit_2, duration=${duration_2}s, changed=$changed_2, failed=$failed_2" >> "$summary_file"
