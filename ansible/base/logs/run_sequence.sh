@@ -1,7 +1,7 @@
 #!/bin/bash
 cd /home/pepesan/IdeaProjects/ejemplos-kubernetes/ansible/base
 
-labs=(01 03 04 05 06 08)
+labs=(03 04 05 06 08)
 
 cleanup_lab() {
   local lab_num="$1"
