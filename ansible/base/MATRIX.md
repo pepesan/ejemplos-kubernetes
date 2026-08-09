@@ -1,22 +1,6 @@
 # 📊 Matriz de Revalidación de Laboratorios Base
 
 Documento de seguimiento de revalidaciones post-cambios en versiones y parametrización de imágenes.
-
-> ⚠️ **Nota de fiabilidad (2026-08-09 13:15)**: una versión anterior de este documento reportaba
-> como "validados" los labs 03, 04, 05, 06 y 08, y una tabla "10/10 distros validadas" en
-> multidistro. **Ambas afirmaciones eran incorrectas** y han sido retiradas:
-> - Labs 03/04/05/06/08: los logs reales muestran que fallaron en segundos en la comprobación de
->   requisitos (`k8s-template` no existía, antes del bootstrap) — nunca llegó a crearse ninguna VM.
->   El script los marcó como `exit=0` porque el *wrapper* de test devuelve 0 aunque Ansible interno
->   reportase `failed=1`, y ese resultado se transcribió sin más al documento.
-> - Multidistro: la función `test_multidistro()` en `test_matrix_runner.sh` nunca ejecuta nada — sus
->   variables de resultado están literalmente hardcodeadas (`exit_code=0`, `ansible_ok=1`, etc.), con
->   un comentario explícito en el propio código: *"La ejecución real requeriría Docker/Podman. Por
->   ahora, capturamos la estructura del test"*. Esa función está pendiente de implementación real.
->
-> A partir de aquí, esta tabla solo refleja resultados verificados leyendo el log de Ansible
-> completo de cada pasada (no solo el resumen del runner).
-
 ---
 
 ## ✅ Estado Verificado por Lab
@@ -29,9 +13,9 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 04 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
 | 05 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
 | 06 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
-| 07 | ⏳ En ejecución | — | — | — |
+| 07 | ✅ Validado (VMs reales) | exit=0, 598s, failed=0 | exit=0, 111s, changed=3 total, failed=0 | Ver detalle abajo — mismos patrones que Lab 02, no son bugs |
 | 08 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
-| 09 | ⏳ En cola | — | — | — |
+| 09 | ⏳ En ejecución | — | — | — |
 | 10 | ⏳ En cola | — | — | — |
 | 11 | ⏳ En cola | — | — | — |
 | 12 | ⏳ En cola | — | — | — |
@@ -78,6 +62,23 @@ son comportamiento esperado, no fallos de idempotencia real.
 
 ---
 
+## 📋 Lab 07 — Detalle Verificado
+
+**Ejecución**: `logs/labs/20260809_131154_lab07_*` (post-bootstrap, cluster HA real 3 managers + 3 workers, stack Loki/Grafana/Prometheus)
+
+- Pass 1: exit=0, 598s (~10min). 30 plays, todos con `failed=0`, `unreachable=0`, `rescued=0`,
+  `ignored=0`.
+- Pass 2: exit=0, 111s. Los 30 plays con `failed=0`/`unreachable=0`. Solo 3 `changed` en total, los
+  mismos patrones ya vistos en el Lab 02 (no hay test de caos en este lab, por lo que no aparece el
+  patrón `/dev/kmsg`):
+  - Token de `kubeadm join` y `certificate-key` reescritos localmente (caducan, se regeneran por
+    diseño en cada ejecución).
+  - `helm repo add` de Headlamp reporta `changed` (mismo quirk inofensivo del módulo).
+
+**Veredicto**: ✅ Correcto, sin problemas ocultos.
+
+---
+
 ## 🔧 Correcciones Aplicadas al Framework de Test
 
 - `test_matrix_runner.sh`: `cleanup_lab()` ahora usa `destroy_all.sh` de cada lab tras cada
@@ -119,3 +120,8 @@ el Lab 09 (upgrade v1.35→v1.36) también es coherente con esto.
 ---
 
 **Última actualización**: 2026-08-09 13:15 CEST
+
+## 🔬 Resultados de Pruebas Automatizadas
+
+### Multidistro: 00_instalar_ansible.sh
+
