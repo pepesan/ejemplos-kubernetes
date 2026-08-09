@@ -21,7 +21,36 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 12 | ✅ Validado (VMs reales) | exit=0, 573s, failed=0 | exit=0, 122s, changed=4 real, failed=0 | El runner reportó "❌ falló" por un bug transitorio propio (ver nota), no del lab |
 | 13 | ❌ **FALLO REAL** | exit=0(*), 1711s, failed=1 | exit=0(*), 1362s, failed=1 | Clúster MongoDB nunca llega a "ready" — ver detalle abajo. (*) exit engañoso, ver bug del framework |
 | 14 | ✅ Validado (VMs reales) | exit=0, 1048s, failed=0 | exit=0, 313s, changed=14 real, failed=0 | `changed` alto por diseño (Vault unseal/rotación de secretos), ver detalle |
-| Multidistro | ❌ No implementado | — | — | `test_multidistro()` es una simulación hardcodeada, no ejecuta nada real |
+| Multidistro | ✅ 10/10 OK (real) | exit=0, ~15min | — | Primera ejecución real (antes era simulación hardcodeada) — ver detalle abajo |
+
+---
+
+## ✅ Multidistro — Primera Ejecución Real (10/10 OK)
+
+**Ejecución**: `logs/multidistro/20260809_165228_*` — delegando en el harness real
+`ansible/scripts/test_instalar_ansible_distros.sh` (lanza contenedores/VMs LXD reales, instala
+`00_instalar_ansible.sh` dentro de cada uno y verifica `ansible-playbook`/`kubectl`/`helm`).
+
+Duración total: ~15 minutos (16:52:28 → 17:07:14), sensiblemente más rápido que la estimación de
+20-40 min. Todos los contenedores de prueba se limpiaron correctamente al finalizar (`trap cleanup
+EXIT`), confirmado con `lxc list` vacío después.
+
+| # | Distro | Resultado |
+|---|--------|-----------|
+| 1 | ubuntu-2404 | ✅ OK |
+| 2 | ubuntu-2604 | ✅ OK |
+| 3 | fedora-43 | ✅ OK |
+| 4 | fedora-44 | ✅ OK |
+| 5 | rocky-9 | ✅ OK |
+| 6 | opensuse-16 | ✅ OK |
+| 7 | opensuse-tumbleweed | ✅ OK |
+| 8 | debian-12 | ✅ OK |
+| 9 | debian-13 | ✅ OK |
+| 10 | rocky-10 | ✅ OK (imagen local `rockylinux/10` ya estaba pre-construida) |
+
+**Veredicto**: ✅ **10/10 distros OK, ejecución real confirmada.** Sustituye a la tabla anterior de
+"10/10 distros validadas", que resultó ser una simulación hardcodeada que nunca ejecutó nada (ver
+sección de correcciones del framework, más abajo).
 
 ---
 
