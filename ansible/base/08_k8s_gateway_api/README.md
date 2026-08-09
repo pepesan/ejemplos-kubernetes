@@ -5,6 +5,17 @@ Este laboratorio despliega un clúster de Kubernetes HA de **6 nodos** (idéntic
 *   **`HTTPRoute`** — dos versiones de una misma app (`stable`/`canary`) con reparto de tráfico ponderado (80/20), para demostrar un despliegue Canary.
 *   **`GRPCRoute`** — un servicio gRPC de ejemplo, para demostrar el enrutamiento nativo de gRPC (imposible con un `Ingress` clásico).
 
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (6 VMs) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodos | vCPU (c/u) | RAM (c/u) | Disco (c/u) |
+|-------|------------|-----------|-------------|
+| 3 managers | 2 | 3 GB | 20 GB |
+| 3 workers | 2 | 2 GB | 15 GB |
+
+**Total: 12 vCPU · 15 GB RAM · 105 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
 ## 📋 Estructura de Playbooks
 
 *   **`02_crear_nodos.yml`** a **`05_instalar_k8s_tools.yml`**: reutilizan (`import_playbook`) los playbooks del escenario 02 para crear las 6 VMs, configurar el SO e instalar containerd/kubeadm/kubelet/kubectl.

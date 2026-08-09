@@ -3,6 +3,18 @@
 Este laboratorio contiene una serie de playbooks de Ansible para desplegar de forma automatizada un clúster de Kubernetes (1 nodo Control-Plane/Manager y 3 nodos Workers) y, sobre este, aprovisionar un clúster de almacenamiento distribuido Ceph utilizando el operador **Rook**.
 
 Cada nodo worker cuenta con un disco virtual secundario `/dev/vdb` que Rook Ceph utilizará automáticamente para crear OSDs (Object Storage Daemons) y replicar los datos en 3 vías.
+
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (6 VMs) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodos | vCPU (c/u) | RAM (c/u) | Disco raíz (c/u) | Disco Ceph (c/u) |
+|-------|------------|-----------|-------------------|-------------------|
+| 3 managers | 2 | 3 GB | 20 GB | — |
+| 3 workers | 4 | 6 GB | 20 GB | 20 GB |
+
+**Total: 18 vCPU · 27 GB RAM · 180 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
 ## 📋 Mapeo con el Temario: "7.- CEPH"
 
 | Punto del Temario | Implementación / Ejemplo en este Laboratorio | Fichero / Tarea |

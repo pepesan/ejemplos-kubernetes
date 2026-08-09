@@ -2,6 +2,16 @@
 
 Este laboratorio contiene una serie de playbooks de Ansible para desplegar un nodo único de Kubernetes sobre contenedores LXD en la máquina local de manera automatizada.
 
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (1 VM) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodo | vCPU | RAM | Disco |
+|------|------|-----|-------|
+| k8s-single | 2 | 4 GB | 40 GB |
+
+**Total: 2 vCPU · 4 GB RAM · 40 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
 ## 📋 Estructura
 
 *   **`ansible.cfg`**: Parámetros globales de Ansible (inventario por defecto, pipelining activo).

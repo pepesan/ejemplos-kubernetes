@@ -4,6 +4,19 @@ Este laboratorio despliega un clúster de Kubernetes HA de **9 nodos** (3 manage
 
 Último de la serie de 4 laboratorios centrados en operadores de bases de datos para Kubernetes (10-13), de nuevo del fabricante Percona (como los escenarios 10 y 12).
 
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (9 VMs base; +3 workers idénticos si se ejecuta el escalado de `[new_workers]`, hasta 12 VMs) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodos | vCPU (c/u) | RAM (c/u) | Disco (c/u) |
+|-------|------------|-----------|-------------|
+| 3 managers | 2 | 3 GB | 20 GB |
+| 6 workers | 3 | 5 GB | 32 GB |
+
+**Total: 24 vCPU · 39 GB RAM · 252 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
+> ⚠️ Es el laboratorio con más requisitos de toda la serie. `lxd_cpu`/`lxd_disk` de los workers son deliberadamente más altos que en el resto (ver comentario en `inventory.ini`): con menos recursos se han observado en vivo Pods en `Pending` por CPU insuficiente y volúmenes Longhorn en `faulted` por falta de margen de disco.
+
 ## 📋 Estructura de Playbooks
 
 *   **`02_crear_nodos.yml`** a **`05_instalar_k8s_tools.yml`**: reutilizan (`import_playbook`) los playbooks del escenario 02 para crear las 9 VMs, configurar el SO e instalar containerd/kubeadm/kubelet/kubectl.

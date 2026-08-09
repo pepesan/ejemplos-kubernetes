@@ -2,6 +2,17 @@
 
 Este laboratorio contiene una serie de playbooks de Ansible para desplegar de forma automatizada un clúster multi-nodo completo de Kubernetes (1 nodo Control-Plane/Manager y 2 nodos Workers) sobre máquinas virtuales LXD en la máquina local.
 
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (6 VMs) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodos | vCPU (c/u) | RAM (c/u) | Disco (c/u) |
+|-------|------------|-----------|-------------|
+| 3 managers | 2 | 3 GB | 20 GB |
+| 3 workers | 2 | 2 GB | 15 GB |
+
+**Total: 12 vCPU · 15 GB RAM · 105 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
 ## 📋 Estructura de Playbooks
 
 *   **`ansible.cfg`**: Configuración de Ansible para este entorno.

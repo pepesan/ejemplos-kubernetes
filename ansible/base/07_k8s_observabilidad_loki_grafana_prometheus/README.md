@@ -2,6 +2,17 @@
 
 Este laboratorio despliega un clúster de Kubernetes HA de **6 nodos** (idéntico al escenario 02: 3 managers + 3 workers, kube-vip), con **Longhorn** como backend de almacenamiento persistente (igual que el 03, sin la separación de nodos storage/workload, ya que aquí el foco es la observabilidad) y un stack completo de métricas y logs con persistencia real: **Prometheus Operator**, **Grafana** y **Loki + Promtail**.
 
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (6 VMs) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodos | vCPU (c/u) | RAM (c/u) | Disco (c/u) |
+|-------|------------|-----------|-------------|
+| 3 managers | 2 | 4 GB | 20 GB |
+| 3 workers | 2 | 4 GB | 40 GB |
+
+**Total: 12 vCPU · 24 GB RAM · 180 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
 ## 📋 Estructura de Playbooks
 
 *   **`02_crear_nodos.yml`** a **`08_unir_workers.yml`**: reutilizan (`import_playbook`) los playbooks del escenario 02 para crear las 6 VMs y formar el clúster HA.
