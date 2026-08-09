@@ -9,12 +9,12 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 |-----|--------|--------|--------|-------|
 | 01 | ✅ Validado (VMs reales) | exit=0, 207s, failed=0 | exit=0, 60s, changed=0, failed=0 | Idempotencia real confirmada, revisado línea a línea |
 | 02 | ✅ Validado (VMs reales) | exit=0, 536s, failed=0 | exit=0, changed>0 mínimo, failed=0 | Ver detalle abajo — changeds explicados, no son bugs |
-| 03 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
-| 04 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
-| 05 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
-| 06 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
+| 03 | ✅ Validado (VMs reales) | exit=0, 544s, failed=0 | exit=0, 147s, changed=4 real, failed=0 | Primera validación genuina — ver detalle abajo |
+| 04 | ⏳ En ejecución | — | — | — |
+| 05 | ⏳ En cola | — | — | — |
+| 06 | ⏳ En cola | — | — | — |
 | 07 | ✅ Validado (VMs reales) | exit=0, 598s, failed=0 | exit=0, 111s, changed=3 total, failed=0 | Ver detalle abajo — mismos patrones que Lab 02, no son bugs |
-| 08 | ⏳ Pendiente de re-test | — | — | Resultado previo era falso positivo (falló por falta de imagen base) |
+| 08 | ⏳ En cola | — | — | — |
 | 09 | ✅ Validado (VMs reales) | exit=0, 665s, failed=0 | exit=0, 204s, changed=55 real (no bug, ver detalle) | Upgrade kubeadm — changed alto es esperado por diseño |
 | 10 | ✅ Validado (VMs reales) | exit=0, 873s, failed=0 | exit=0, 120s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
 | 11 | ✅ Validado (VMs reales) | exit=0, 644s, failed=0 | exit=0, 117s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
@@ -59,6 +59,20 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 
 **Veredicto**: ✅ Correcto, sin problemas ocultos. Todos los `changed` de Pass 2 están explicados y
 son comportamiento esperado, no fallos de idempotencia real.
+
+---
+
+## 📋 Lab 03 — Detalle Verificado (primera validación genuina)
+
+**Ejecución**: `logs/labs/20260809_154857_lab03_*` (post-bootstrap, cluster HA real 8 nodos: 3 managers + 2 workload workers + 3 storage workers, Longhorn)
+
+- Pass 1: exit real=0, 544s, `failed=0` en todos los plays.
+- Pass 2: exit real=0, 147s, `failed=0` en todos los plays. **4 cambios reales**, todos el patrón
+  benigno estándar (token `kubeadm join`/`certificate-key` + `helm repo add` ×2: Headlamp y Longhorn).
+
+**Veredicto**: ✅ Correcto, sin problemas ocultos. Esta es la **primera validación real** de este
+lab — el resultado anterior en este documento era un falso positivo (falló en segundos por falta
+de la imagen base `k8s-template`, antes del bootstrap).
 
 ---
 

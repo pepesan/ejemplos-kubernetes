@@ -57,110 +57,74 @@ warning() {
 # ============================================================================
 
 test_multidistro() {
-  error "=========================================="
-  error "PRUEBAS MULTIDISTRO: NO IMPLEMENTADO"
-  error "=========================================="
-  error "Esta función nunca ejecuta nada real (requeriría Docker/Podman)."
-  error "Una versión anterior devolvía éxito hardcodeado (exit_code=0, ansible_ok=1,"
-  error "kubectl_ok=1, helm_ok=1) sin lanzar ningún contenedor — resultados ficticios."
-  error "Se ha desactivado para no volver a generar una tabla de resultados falsa."
-  error "Ver MATRIX.md para el detalle de este hallazgo (2026-08-09)."
-  return 1
-}
+  log "=========================================="
+  log "PRUEBAS MULTIDISTRO: 00_instalar_ansible.sh"
+  log "=========================================="
 
-# shellcheck disable=SC2317
-_test_multidistro_unimplemented() {
-  # Definir matriz de distros
-  declare -A distros=(
-    [ubuntu_2404]="ubuntu:24.04"
-    [ubuntu_2604]="ubuntu:26.04"
-    [debian_12]="debian:12"
-    [debian_13]="debian:13"
-    [rocky_9]="rockylinux:9"
-    [rocky_10]="rockylinux:10"
-    [fedora_40]="fedora:40"
-    [fedora_41]="fedora:41"
-    [opensuse_leap]="opensuse/leap:16.0"
-    [opensuse_tumbleweed]="opensuse/tumbleweed:latest"
-  )
+  local harness="$SCRIPT_DIR/../scripts/test_instalar_ansible_distros.sh"
 
-  # Crear archivo de resultados con timestamp
+  if [ ! -x "$harness" ]; then
+    error "No se encuentra o no es ejecutable: $harness"
+    return 1
+  fi
+
+  log "Delegando en el harness real: $harness"
+  log "(lanza contenedores/VMs LXD reales por cada distro; puede tardar 20-40+ min)"
+
+  local full_log="${MULTIDISTRO_LOG_DIR}/${TIMESTAMP}_full.log"
   local results_file="${MULTIDISTRO_LOG_DIR}/${TIMESTAMP}_results.csv"
-  echo "distro,version,exit_code,duration_sec,ansible_ok,kubectl_ok,helm_ok,status" > "$results_file"
-
-  # También crear resumen
   local summary_file="${MULTIDISTRO_LOG_DIR}/${TIMESTAMP}_summary.log"
-  exec 4>"$summary_file"
+  echo "distro,status" > "$results_file"
 
-  for distro_key in "${!distros[@]}"; do
-    local image="${distros[$distro_key]}"
-    log ""
-    log "Probando: $distro_key ($image)"
-    log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  local start_time
+  start_time=$(date +%s)
+  local exit_code=0
+  if ( "$harness" > "$full_log" 2>&1 ); then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+  local end_time
+  end_time=$(date +%s)
+  local duration=$((end_time - start_time))
 
-    local test_log="${MULTIDISTRO_LOG_DIR}/${TIMESTAMP}_test_${distro_key}.log"
-    local start_time=$(date +%s)
+  # El harness imprime "OK: <distro>" o "FALLO: <distro>" por cada distro probada
+  while IFS= read -r line; do
+    case "$line" in
+      "OK: "*)
+        echo "${line#OK: },OK" >> "$results_file"
+        ;;
+      "FALLO: "*)
+        echo "${line#FALLO: },FAIL" >> "$results_file"
+        ;;
+    esac
+  done < "$full_log"
 
-    # Crear contenedor de prueba
-    local container_name="test_$(echo $distro_key | tr '/' '_')_$$"
-
-    # Script que se ejecutará dentro del contenedor
-    local test_script="
-set -euo pipefail
-cd /tmp
-curl -fsSL 'https://raw.githubusercontent.com/pepesan/ejemplos-kubernetes/develop/ansible/base/00_instalar_ansible.sh' -o install.sh 2>&1 || true
-if [ ! -f install.sh ]; then
-  # Fallback: copiar desde el host si está disponible
-  cp /root/install.sh . 2>/dev/null || echo 'ERROR: No se pudo obtener el script'
-fi
-chmod +x install.sh || true
-export SKIP_CHECK_REQUISITOS=true
-./install.sh > test_output.log 2>&1 || true
-exit_code=\$?
-
-# Verificar instalaciones
-ansible_ok=0
-kubectl_ok=0
-helm_ok=0
-
-which ansible-playbook >/dev/null 2>&1 && ansible_ok=1 || true
-which kubectl >/dev/null 2>&1 && kubectl_ok=1 || true
-which helm >/dev/null 2>&1 && helm_ok=1 || true
-
-echo \"EXIT_CODE:\$exit_code\"
-echo \"ANSIBLE_OK:\$ansible_ok\"
-echo \"KUBECTL_OK:\$kubectl_ok\"
-echo \"HELM_OK:\$helm_ok\"
-"
-
-    # Nota: La ejecución real requeriría Docker/Podman.
-    # Por ahora, capturamos la estructura del test
-    echo "# Test para: $distro_key" >> "$test_log"
-    echo "# Imagen: $image" >> "$test_log"
-    echo "# Script: 00_instalar_ansible.sh" >> "$test_log"
-
-    # Simulación (en producción, reemplazar con ejecución real)
-    local exit_code=0
-    local ansible_ok=1
-    local kubectl_ok=1
-    local helm_ok=1
-
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
-
-    local status="✅ OK"
-    [ "$exit_code" -eq 0 ] && [ "$ansible_ok" -eq 1 ] && [ "$kubectl_ok" -eq 1 ] && [ "$helm_ok" -eq 1 ] || status="❌ FAIL"
-
-    echo "$distro_key,$image,$exit_code,$duration,$ansible_ok,$kubectl_ok,$helm_ok,$status" >> "$results_file"
-    echo "$status - $distro_key (duración: ${duration}s)"
-  done
+  {
+    echo "Multidistro run - Started: $(date)"
+    echo "Harness: $harness"
+    echo "Exit code: $exit_code"
+    echo "Duration: ${duration}s"
+    echo ""
+    grep -E "^(OK|FALLO): " "$full_log" || true
+  } > "$summary_file"
 
   log ""
-  success "Resultados multidistro guardados en:"
-  log "  CSV: $results_file"
-  log "  Summary: $summary_file"
-  log "  Dir: $MULTIDISTRO_LOG_DIR"
-  return 0
+  log "Resultado del harness (exit=$exit_code, duración=${duration}s):"
+  grep -E "^(OK|FALLO): " "$full_log" | while IFS= read -r line; do log "  $line"; done
+
+  log ""
+  log "Resultados: $results_file"
+  log "Resumen: $summary_file"
+  log "Log completo: $full_log"
+
+  if [ "$exit_code" -eq 0 ]; then
+    success "Multidistro: todas las distros OK"
+    return 0
+  else
+    warning "Multidistro: hay distros con fallo — ver $full_log"
+    return 1
+  fi
 }
 
 # ============================================================================

@@ -8,42 +8,14 @@
 # ============================================================================
 # MATRIZ MULTIDISTRO: 00_instalar_ansible.sh
 # ============================================================================
-
-declare -gA DISTROS=(
-  # Ubuntu (LTS + Latest)
-  [ubuntu_2404]="ubuntu:24.04"
-  [ubuntu_2604]="ubuntu:26.04"
-
-  # Debian (Stable + Testing)
-  [debian_12]="debian:12"
-  [debian_13]="debian:13"
-
-  # Rocky Linux
-  [rocky_9]="rockylinux:9"
-  [rocky_10]="rockylinux:10"
-
-  # Fedora (Latest releases)
-  [fedora_40]="fedora:40"
-  [fedora_41]="fedora:41"
-
-  # openSUSE (Stable + Rolling)
-  [opensuse_leap]="opensuse/leap:16.0"
-  [opensuse_tumbleweed]="opensuse/tumbleweed:latest"
-)
-
-# Distros a probar (subset si no quieres todas)
-ENABLED_DISTROS=(
-  ubuntu_2404
-  ubuntu_2604
-  debian_12
-  debian_13
-  rocky_9
-  rocky_10
-  fedora_40
-  fedora_41
-  opensuse_leap
-  opensuse_tumbleweed
-)
+#
+# La lista de distros/imágenes ya NO se define aquí. test_multidistro() (en
+# test_matrix_runner.sh) delega directamente en el harness real y mantenido
+# ../scripts/test_instalar_ansible_distros.sh, que es la fuente canónica de
+# qué distros/versiones se prueban (evita que esta lista quede desincronizada
+# de la real, como pasó: esta llegó a tener Fedora 40/41 y un alias de
+# openSUSE Leap incorrecto mientras el harness real ya usaba 43/44 y
+# opensuse/16.0). Edita ese script si necesitas añadir/quitar una distro.
 
 # ============================================================================
 # MATRIZ DE LABS: Revalidaciones de idempotencia
@@ -151,11 +123,6 @@ get_lab_path() {
   echo "$(dirname "${BASH_SOURCE[0]}")/${lab_num}_${lab_name}"
 }
 
-# Obtener lista de distros habilitadas
-get_enabled_distros() {
-  printf '%s\n' "${ENABLED_DISTROS[@]}"
-}
-
 # Obtener lista de labs habilitados
 get_enabled_labs() {
   printf '%s\n' "${ENABLED_LABS[@]}"
@@ -168,15 +135,14 @@ get_lab_changes() {
 }
 
 # Exportar para uso en subshells
-export DISTROS ENABLED_DISTROS LABS ENABLED_LABS CHANGED_VARS LABS_WITH_CHANGES
+export LABS ENABLED_LABS CHANGED_VARS LABS_WITH_CHANGES
 export MULTIDISTRO_SUCCESS_CRITERIA LAB_SUCCESS_CRITERIA
 
 # Info si se ejecuta directamente
 if [ "${BASH_SOURCE[0]}" == "${0}" ]; then
   echo "📋 Configuración de Matrices de Prueba"
   echo ""
-  echo "Distros habilitadas ($(printf '%s\n' "${ENABLED_DISTROS[@]}" | wc -l)):"
-  printf '%s\n' "${ENABLED_DISTROS[@]}" | sed 's/^/  - /'
+  echo "Distros multidistro: ver ../scripts/test_instalar_ansible_distros.sh (fuente canónica)"
   echo ""
   echo "Labs habilitados ($(printf '%s\n' "${ENABLED_LABS[@]}" | wc -l)):"
   printf '%s\n' "${ENABLED_LABS[@]}" | sed 's/^/  - Lab /'
