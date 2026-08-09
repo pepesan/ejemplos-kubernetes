@@ -1,6 +1,20 @@
 # Laboratorio K8s + Clúster Ceph Externo e Independiente sobre LXD
 
 Este laboratorio contiene el diseño y las herramientas para desplegar e integrar un clúster de Kubernetes con un clúster de almacenamiento **Ceph Externo** e independiente, simulando un entorno empresarial donde el almacenamiento no reside dentro de Kubernetes sino en un clúster de almacenamiento físico o virtual separado.
+
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (10 VMs: clúster k8s + clúster Ceph externo, independientes) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodos | vCPU (c/u) | RAM (c/u) | Disco raíz (c/u) | Disco Ceph (c/u) |
+|-------|------------|-----------|-------------------|-------------------|
+| 3 managers (k8s) | 2 | 3 GB | 20 GB | — |
+| 3 workers (k8s) | 2 | 2 GB | 15 GB | — |
+| 1 ceph-mon | 1 | 2 GB | 15 GB | — |
+| 3 ceph-osd | 1 | 2 GB | 15 GB | 20 GB |
+
+**Total: 16 vCPU · 23 GB RAM · 225 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
 ## 📋 Mapeo con el Temario: "7.- CEPH"
 
 | Punto del Temario | Implementación / Ejemplo en este Laboratorio | Fichero / Tarea |

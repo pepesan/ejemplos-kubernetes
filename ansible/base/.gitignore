@@ -1,0 +1,9 @@
+
+# Test logs (auto-generated, should not be versioned)
+logs/labs/
+logs/multidistro/
+logs/*.log
+logs/*.csv
+
+# Previous working directories (obsolete)
+logs/current_*

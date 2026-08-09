@@ -4,6 +4,18 @@ Este laboratorio despliega un clúster de Kubernetes avanzado de **6 nodos** vir
 
 Utiliza **Longhorn** como motor de almacenamiento de bloques y sistema de archivos distribuido nativo de Kubernetes para dar soporte a volúmenes persistentes multi-nodo (**ReadWriteMany - RWX**) y mono-nodo (**ReadWriteOnce - RWO**) con tolerancia a fallos mediante replicación en 3 vías.
 
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (8 VMs) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodos | vCPU (c/u) | RAM (c/u) | Disco (c/u) |
+|-------|------------|-----------|-------------|
+| 3 managers | 2 | 3 GB | 20 GB |
+| 2 workers (cómputo) | 2 | 2 GB | 15 GB |
+| 3 workers (storage) | 1 | 2 GB | 15 GB |
+
+**Total: 13 vCPU · 19 GB RAM · 135 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
 ## 📋 Estructura de Playbooks
 
 *   **`ansible.cfg`**: Configuración de Ansible para este entorno.

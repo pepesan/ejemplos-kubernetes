@@ -2,6 +2,17 @@
 
 Este laboratorio despliega un clúster de Kubernetes HA de **6 nodos** (idéntico al escenario 02: 3 managers + 3 workers, kube-vip), reutilizando vía `import_playbook` sus playbooks de infraestructura y bootstrap. Sobre él instala **MetalLB** para exponer servicios de tipo `LoadBalancer` en una red local sin balanceador de nube, y el **NGINX Ingress Controller** para enrutar tráfico HTTP a varios microservicios según el nombre de host.
 
+## 💻 Requisitos del Host
+
+Recursos que este laboratorio reserva en LXD (6 VMs) — el host debe tener al menos esto libre, más margen para su propio sistema operativo:
+
+| Nodos | vCPU (c/u) | RAM (c/u) | Disco (c/u) |
+|-------|------------|-----------|-------------|
+| 3 managers | 2 | 3 GB | 20 GB |
+| 3 workers | 2 | 2 GB | 15 GB |
+
+**Total: 12 vCPU · 15 GB RAM · 105 GB disco** (+ margen recomendado para el host: 2 vCPU / 2 GB RAM / 10 GB disco libres adicionales)
+
 ## 📋 Estructura de Playbooks
 
 *   **`ansible.cfg`** / **`inventory.ini`** / **`group_vars/all.yml`**: configuración del entorno, incluyendo el rango de IPs reservado para MetalLB (`metallb_ip_range`) y el dominio local de pruebas (`ingress_base_domain`).
