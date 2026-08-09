@@ -69,11 +69,20 @@ declare -gA LABS=(
 
 # Labs a revalidar (subset si no quieres todos)
 ENABLED_LABS=(
+  01  # Mono-nodo Base
   02  # Base HA (crítico, heredado por todos)
   03  # Longhorn (heredado por 07-14)
-  04  # Rook Ceph (cambios en chart_version)
+  04  # Rook Ceph
+  05  # Ceph Externo
   06  # MetalLB + Ingress
-  08  # Gateway API (cambios en imágenes)
+  07  # Observabilidad (Loki/Grafana/Prometheus)
+  08  # Gateway API
+  09  # Actualización HA
+  10  # Percona MySQL PXC
+  11  # MariaDB Galera
+  12  # PostgreSQL
+  13  # MongoDB
+  14  # Vault
 )
 
 # ============================================================================
@@ -92,15 +101,22 @@ declare -gA CHANGED_VARS=(
   [grpc_demo_image]="kong/grpcbin:0.5"
 )
 
-# Labs que recibieron cambios
+# Labs que recibieron cambios (auditoría 2026-08-09)
 declare -gA LABS_WITH_CHANGES=(
   [01]="test_nginx_image, test_alpine_image"
-  [02]="test_nginx_image, test_alpine_image"
+  [02]="test_nginx_image, test_alpine_image, headlamp_chart_version, kube_vip_image"
   [03]="test_alpine_image"
   [04]="rook_ceph_chart_version, test_alpine_image"
   [05]="test_alpine_image"
   [06]="test_nginx_image, test_busybox_image"
+  [07]="loki_chart_version, promtail_chart_version, kube_vip_image"
   [08]="test_nginx_image, grpc_demo_image"
+  [09]="k8s_upgrade_target_version"
+  [10]="percona_pxc_image_tag, percona_pxc_haproxy_image_tag"
+  [11]="mariadb_image_tag"
+  [12]="percona_pg_image_tag"
+  [13]="mongodb_image_tag"
+  [14]="vault_image_tag, percona_pxc_image_tag"
 )
 
 # ============================================================================

@@ -266,6 +266,30 @@ test_lab_idempotence() {
 # COMPILAR RESULTADOS EN MATRIX.md
 # ============================================================================
 
+cleanup_lab() {
+  local lab_num="$1"
+  local lab_path="$2"
+
+  if [ -z "$lab_path" ] || [ ! -d "$lab_path" ]; then
+    return 0
+  fi
+
+  log "Limpiando Lab $lab_num..."
+
+  # Si existe destroy_all.sh, usarlo (es más específico)
+  if [ -f "$lab_path/destroy_all.sh" ]; then
+    (cd "$lab_path" && timeout 300 ./destroy_all.sh > /dev/null 2>&1) || true
+    success "Lab $lab_num limpiado con destroy_all.sh"
+  else
+    # Fallback: limpiar VMs manualmente (para Lab 01)
+    for vm in $(lxc list -cn --format=json 2>/dev/null | grep -o '"name":"[^"]*"' | cut -d'"' -f4); do
+      lxc stop "$vm" 2>/dev/null || true
+      lxc delete "$vm" 2>/dev/null || true
+    done
+    success "Lab $lab_num limpiado (destrucción manual)"
+  fi
+}
+
 compile_results() {
   log ""
   log "=========================================="
@@ -325,6 +349,16 @@ main() {
       if [[ "$lab_num" =~ ^[0-9]+$ ]] && [ "$lab_num" -ge 1 ] && [ "$lab_num" -le 14 ]; then
         test_lab_idempotence "$lab_num"
         compile_results
+
+        # Cleanup usando destroy_all.sh del lab
+        local lab_path=""
+        for dir in "$SCRIPT_DIR"/${lab_num}_*/; do
+          if [ -d "$dir" ]; then
+            lab_path="${dir%/}"
+            break
+          fi
+        done
+        cleanup_lab "$lab_num" "$lab_path"
       else
         error "Lab número inválido: $lab_num (válido: 01-14)"
         exit 1
