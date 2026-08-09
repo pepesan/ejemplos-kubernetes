@@ -10,7 +10,7 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 01 | ✅ Validado (VMs reales) | exit=0, 207s, failed=0 | exit=0, 60s, changed=0, failed=0 | Idempotencia real confirmada, revisado línea a línea |
 | 02 | ✅ Validado (VMs reales) | exit=0, 536s, failed=0 | exit=0, changed>0 mínimo, failed=0 | Ver detalle abajo — changeds explicados, no son bugs |
 | 03 | ✅ Validado (VMs reales) | exit=0, 544s, failed=0 | exit=0, 147s, changed=4 real, failed=0 | Primera validación genuina — ver detalle abajo |
-| 04 | ⏳ En ejecución | — | — | — |
+| 04 | ❌ **FALLO REAL (corregido)** | exit=2, 362s, failed=1 | — (no llegó a Pass 2) | Variable `ceph_csi_chart_version` sin definir — ver detalle abajo. Corregido, pendiente re-test |
 | 05 | ⏳ En cola | — | — | — |
 | 06 | ⏳ En cola | — | — | — |
 | 07 | ✅ Validado (VMs reales) | exit=0, 598s, failed=0 | exit=0, 111s, changed=3 total, failed=0 | Ver detalle abajo — mismos patrones que Lab 02, no son bugs |
@@ -73,6 +73,35 @@ son comportamiento esperado, no fallos de idempotencia real.
 **Veredicto**: ✅ Correcto, sin problemas ocultos. Esta es la **primera validación real** de este
 lab — el resultado anterior en este documento era un falso positivo (falló en segundos por falta
 de la imagen base `k8s-template`, antes del bootstrap).
+
+---
+
+## ❌ Lab 04 — FALLO REAL (encontrado, corregido, pendiente re-test)
+
+**Ejecución**: `logs/labs/20260809_160045_lab04_pass1.log`
+
+Pass 1 abortó de verdad (exit real=2, gracias al fix del exit code — antes esto se habría
+enmascarado como "Exit: 0"):
+
+```
+fatal: [localhost]: FAILED! => {"changed": false, "msg": "Task failed: Finalization of task args
+for 'kubernetes.core.helm' failed: Error while resolving value for 'chart_version':
+'ceph_csi_chart_version' is undefined"}
+```
+
+**Causa raíz**: la auditoría de parametrización de esta misma sesión (fase inicial) encontró y
+corrigió la falta de `rook_ceph_chart_version` para el chart del operador Rook, pero **pasó por
+alto un segundo `kubernetes.core.helm` en el mismo playbook** (`10_desplegar_rook_ceph.yml:67`)
+que instala `ceph-csi-operator/ceph-csi-drivers` y también necesita su propia variable de versión
+— nunca se había ejecutado este playbook con VMs reales hasta ahora, así que el hueco no se
+detectó antes.
+
+**Fix aplicado**: añadida `ceph_csi_chart_version: "1.0.4"` en
+`04_k8s_ha_almacenamiento_persistente_rook_ceph/group_vars/all.yml` (versión verificada como la
+más reciente estable vía `helm search repo ceph-csi-operator/ceph-csi-drivers --versions`).
+
+**Estado**: pendiente de re-test para confirmar que el fix resuelve el problema y que el resto del
+playbook (creación real de OSDs, PVCs de prueba RBD/CephFS) funciona correctamente.
 
 ---
 
