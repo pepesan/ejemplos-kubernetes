@@ -12,7 +12,7 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 03 | ✅ Validado (VMs reales) | exit=0, 544s, failed=0 | exit=0, 147s, changed=4 real, failed=0 | Primera validación genuina — ver detalle abajo |
 | 04 | ❌ **FALLO REAL (corregido)** | exit=2, 362s, failed=1 | — (no llegó a Pass 2) | Variable `ceph_csi_chart_version` sin definir — ver detalle abajo. Corregido, pendiente re-test |
 | 05 | ✅ Validado, con matices | exit=0, 838s, failed=0 | exit=0, 156s, changed=9 real, failed=0 | Funcionalmente correcto; 3 tareas con `changed` evitable — ver detalle |
-| 06 | ⏳ En ejecución | — | — | — |
+| 06 | ✅ Validado (VMs reales) | exit=0, 393s, failed=0 | exit=0, 112s, changed=3 real, failed=0 | Primera validación genuina — patrón benigno estándar |
 | 07 | ✅ Validado (VMs reales) | exit=0, 598s, failed=0 | exit=0, 111s, changed=3 total, failed=0 | Ver detalle abajo — mismos patrones que Lab 02, no son bugs |
 | 08 | ⏳ En cola | — | — | — |
 | 09 | ✅ Validado (VMs reales) | exit=0, 665s, failed=0 | exit=0, 204s, changed=55 real (no bug, ver detalle) | Upgrade kubeadm — changed alto es esperado por diseño |
