@@ -219,8 +219,12 @@ test_lab_idempotence() {
   echo "=== PASADA 1 ===" >> "$summary_file"
 
   local start_1=$(date +%s)
-  (cd "$lab_path" && timeout 3600 ./run_all.sh > "$pass1_log" 2>&1) || true
-  local exit_1=$?
+  local exit_1=0
+  if (cd "$lab_path" && timeout 3600 ./run_all.sh > "$pass1_log" 2>&1); then
+    exit_1=0
+  else
+    exit_1=$?
+  fi
   local end_1=$(date +%s)
   local duration_1=$((end_1 - start_1))
 
@@ -244,8 +248,12 @@ test_lab_idempotence() {
     echo "=== PASADA 2 ===" >> "$summary_file"
 
     local start_2=$(date +%s)
-    (cd "$lab_path" && timeout 3600 ./run_all.sh > "$pass2_log" 2>&1) || true
-    local exit_2=$?
+    local exit_2=0
+    if (cd "$lab_path" && timeout 3600 ./run_all.sh > "$pass2_log" 2>&1); then
+      exit_2=0
+    else
+      exit_2=$?
+    fi
     local end_2=$(date +%s)
     local duration_2=$((end_2 - start_2))
 
@@ -258,13 +266,13 @@ test_lab_idempotence() {
 
     log "Exit: $exit_2 | Duración: ${duration_2}s | Cambios: $changed_2 | Fallos: $failed_2"
 
-    if [ $exit_2 -eq 0 ] && [ "$changed_2" -lt 5 ]; then
+    if [ $exit_2 -eq 0 ] && [ "$failed_2" -eq 0 ] && [ "$changed_2" -lt 5 ]; then
       success "Lab $lab_num: IDEMPOTENCIA CONFIRMADA ✅"
       log "Resultados: $results_file"
       log "Resumen: $summary_file"
       return 0
     else
-      warning "Lab $lab_num: Idempotencia incompleta (cambios=$changed_2)"
+      warning "Lab $lab_num: Idempotencia incompleta (cambios=$changed_2, fallos=$failed_2)"
       log "Resultados: $results_file"
       log "Resumen: $summary_file"
       return 1

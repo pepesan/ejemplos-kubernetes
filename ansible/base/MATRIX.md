@@ -20,7 +20,7 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 11 | ✅ Validado (VMs reales) | exit=0, 644s, failed=0 | exit=0, 117s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
 | 12 | ✅ Validado (VMs reales) | exit=0, 573s, failed=0 | exit=0, 122s, changed=4 real, failed=0 | El runner reportó "❌ falló" por un bug transitorio propio (ver nota), no del lab |
 | 13 | ❌ **FALLO REAL** | exit=0(*), 1711s, failed=1 | exit=0(*), 1362s, failed=1 | Clúster MongoDB nunca llega a "ready" — ver detalle abajo. (*) exit engañoso, ver bug del framework |
-| 14 | ⏳ En ejecución | — | — | — |
+| 14 | ✅ Validado (VMs reales) | exit=0, 1048s, failed=0 | exit=0, 313s, changed=14 real, failed=0 | `changed` alto por diseño (Vault unseal/rotación de secretos), ver detalle |
 | Multidistro | ❌ No implementado | — | — | `test_multidistro()` es una simulación hardcodeada, no ejecuta nada real |
 
 ---
@@ -175,6 +175,25 @@ límites de recursos del propio Percona Operator, etc.). **Pendiente de investig
 **Corrección pendiente** (se aplicará tras terminar la cola actual, para no repetir el incidente de
 edición en pleno vuelo que afectó a Lab 12): capturar el exit code real de `run_all.sh` sin `|| true`,
 y exigir `failed_N -eq 0` además de `changed_N < 5` para declarar idempotencia confirmada.
+
+---
+
+## 📋 Lab 14 — Detalle Verificado (HashiCorp Vault, credenciales dinámicas)
+
+**Ejecución**: `logs/labs/20260809_151142_lab14_*` (post-bootstrap, cluster HA real hiperconvergente con PXC + Vault)
+
+- Pass 1: exit real=0, 1048s, `failed=0` en todos los plays.
+- Pass 2: exit real=0, 313s, `failed=0` en todos los plays. **14 cambios reales**, todos explicados
+  por el propósito del lab (credenciales dinámicas, no configuración estática):
+  - Desellar `vault-0` (Vault requiere unseal en cada arranque/reinicio de Pod).
+  - Reescritura de un secreto estático de ejemplo y reconfiguración del método de auth de Kubernetes.
+  - Creación del esquema/usuario `vault_admin` en PXC.
+  - Eliminación deliberada del Pod de la app de ejemplo "para forzar un montaje fresco de la
+    credencial" — es una tarea explícitamente no idempotente, a propósito, para demostrar rotación.
+  - Más el patrón benigno estándar (token `kubeadm join`/`certificate-key`/`helm repo add`).
+
+**Veredicto**: ✅ Correcto, sin problemas ocultos. Mismo patrón que Lab 09: alto `changed` en Pass 2
+por diseño (procedimiento de rotación de credenciales, no un rol de configuración declarativo).
 
 ---
 
