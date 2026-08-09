@@ -11,8 +11,8 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 02 | ✅ Validado (VMs reales) | exit=0, 536s, failed=0 | exit=0, changed>0 mínimo, failed=0 | Ver detalle abajo — changeds explicados, no son bugs |
 | 03 | ✅ Validado (VMs reales) | exit=0, 544s, failed=0 | exit=0, 147s, changed=4 real, failed=0 | Primera validación genuina — ver detalle abajo |
 | 04 | ❌ **FALLO REAL (corregido)** | exit=2, 362s, failed=1 | — (no llegó a Pass 2) | Variable `ceph_csi_chart_version` sin definir — ver detalle abajo. Corregido, pendiente re-test |
-| 05 | ⏳ En cola | — | — | — |
-| 06 | ⏳ En cola | — | — | — |
+| 05 | ✅ Validado, con matices | exit=0, 838s, failed=0 | exit=0, 156s, changed=9 real, failed=0 | Funcionalmente correcto; 3 tareas con `changed` evitable — ver detalle |
+| 06 | ⏳ En ejecución | — | — | — |
 | 07 | ✅ Validado (VMs reales) | exit=0, 598s, failed=0 | exit=0, 111s, changed=3 total, failed=0 | Ver detalle abajo — mismos patrones que Lab 02, no son bugs |
 | 08 | ⏳ En cola | — | — | — |
 | 09 | ✅ Validado (VMs reales) | exit=0, 665s, failed=0 | exit=0, 204s, changed=55 real (no bug, ver detalle) | Upgrade kubeadm — changed alto es esperado por diseño |
@@ -102,6 +102,39 @@ más reciente estable vía `helm search repo ceph-csi-operator/ceph-csi-drivers 
 
 **Estado**: pendiente de re-test para confirmar que el fix resuelve el problema y que el resto del
 playbook (creación real de OSDs, PVCs de prueba RBD/CephFS) funciona correctamente.
+
+---
+
+## 📋 Lab 05 — Detalle Verificado (Ceph Externo, con matices)
+
+**Ejecución**: `logs/labs/20260809_160657_lab05_*` (post-bootstrap, 10 nodos: cluster k8s + clúster Ceph externo independiente vía cephadm)
+
+- Pass 1: exit real=0, 838s, `failed=0` en todos los plays.
+- Pass 2: exit real=0, 156s, `failed=0` en todos los plays. **9 cambios reales**, primera
+  validación genuina de este lab — el resultado anterior era falso positivo. Desglose:
+  - 2 + 1 del patrón benigno estándar (token kubeadm + helm repo).
+  - **3 en "Añadir clave SSH de Ceph a authorized_keys"** (uno por cada `ceph-osd`): el guard de
+    `cephadm bootstrap` (`when: not ceph_conf_stat.stat.exists`) sí se salta correctamente en
+    Pass 2 (confirmado, `/etc/ceph/ceph.conf` ya existe), así que la clave pública leída debería
+    ser idéntica a la de Pass 1 — pero el módulo `authorized_key` igual reporta `changed`. Causa
+    exacta no confirmada (no se pudo inspeccionar el filesystem tras la limpieza de VMs); candidato
+    más probable es una diferencia de formato/espacios en blanco al comparar la clave leída vía
+    `slurp`+`b64decode` contra la ya presente. **No afecta a la funcionalidad** (la clave ya estaba
+    presente y sigue siéndolo), es un artefacto de reporting.
+  - **3 en "Añadir hosts de OSDs al orquestador Ceph"** (uno por host): el `changed_when: "'Added
+    host' in host_add_out.stdout"` no distingue "host añadido por primera vez" de "host ya
+    presente, comando reejecutado sin error" — `ceph orch host add` parece devolver el mismo
+    mensaje "Added host ..." en ambos casos, así que el guard nunca evalúa a `false`. Cosmético,
+    no funcional.
+  - **1 en "Activar escaneo de dispositivos..."**: `changed_when: true` puesto explícitamente por
+    el autor (comando imperativo `ceph orch apply osd --all-available-devices`, no hay forma
+    sencilla de detectar "sin cambios" de forma fiable) — igual que el patrón ya visto en Labs
+    09/14, por diseño.
+
+**Veredicto**: ✅ Funcionalmente correcto (despliegue, integración CSI y verificación de
+persistencia RBD externa funcionan; `failed=0` en ambas pasadas). Los 6 `changed` de Ceph (SSH key
++ host add) son mejoras de idempotencia deseables pero no bloqueantes — candidatos a
+`changed_when` más precisos en una sesión futura, no urgente.
 
 ---
 
