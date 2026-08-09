@@ -18,7 +18,7 @@ Documento de seguimiento de revalidaciones post-cambios en versiones y parametri
 | 09 | ✅ Validado (VMs reales) | exit=0, 665s, failed=0 | exit=0, 204s, changed=55 real (no bug, ver detalle) | Upgrade kubeadm — changed alto es esperado por diseño |
 | 10 | ✅ Validado (VMs reales) | exit=0, 873s, failed=0 | exit=0, 120s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
 | 11 | ✅ Validado (VMs reales) | exit=0, 644s, failed=0 | exit=0, 117s, changed=3 real, failed=0 | Patrón benigno estándar (token kubeadm + helm repo) |
-| 12 | ⏳ En ejecución | — | — | — |
+| 12 | ✅ Validado (VMs reales) | exit=0, 573s, failed=0 | exit=0, 122s, changed=4 real, failed=0 | El runner reportó "❌ falló" por un bug transitorio propio (ver nota), no del lab |
 | 13 | ⏳ En cola | — | — | — |
 | 14 | ⏳ En cola | — | — | — |
 | Multidistro | ❌ No implementado | — | — | `test_multidistro()` es una simulación hardcodeada, no ejecuta nada real |
@@ -112,6 +112,30 @@ fallo de idempotencia real.
   en todos los plays, **3 cambios reales**, exactamente el mismo patrón que Lab 10.
 
 **Veredicto**: ✅ Ambos correctos, sin problemas ocultos.
+
+---
+
+## 📋 Lab 12 — Detalle Verificado (y nota de incidente)
+
+**Ejecución**: `logs/labs/20260809_140826_lab12_*` (post-bootstrap, cluster HA real, PostgreSQL vía Percona Operator/Patroni)
+
+> ⚠️ **Incidente durante la sesión**: el commit `3aa2dd2` (fix del contador `sum_recap_field`) se
+> guardó en disco a las 14:12:11, pero el proceso `./test_matrix_runner.sh lab12` ya llevaba
+> corriendo desde las 14:08:26 — se editó el script mientras estaba en pleno vuelo. El proceso en
+> curso quedó leyendo offsets desincronizados del fichero tras la edición y perdió la definición de
+> `sum_recap_field`, causando `orden no encontrada` y, en cascada, que `run_sequence.sh` reportase
+> **"❌ Lab 12 falló"** aunque Ansible nunca falló realmente. Verificado leyendo los logs crudos
+> directamente (bypasseando el contador roto):
+
+- Pass 1: exit=0, 573s. Todos los plays con `failed=0`, `unreachable=0`, `rescued=0`, `ignored=0`.
+- Pass 2: exit=0, 122s. Todos los plays con `failed=0`/`unreachable=0`. **4 cambios reales**, mismo
+  patrón benigno de siempre (token `kubeadm join` + `certificate-key` + `helm repo add`, esta vez
+  del repositorio de Percona en vez de Headlamp).
+
+**Veredicto**: ✅ Correcto, sin problemas ocultos. El "❌ falló" que aparece en
+`logs/sequence_remaining_progress.log` para este lab es un falso negativo del framework de test
+(editado mientras ejecutaba), no un fallo real del laboratorio. Confirmado que Lab 13 (arrancado a
+las 14:20:13, después de que la edición ya estuviera guardada) no sufre este problema.
 
 ---
 
