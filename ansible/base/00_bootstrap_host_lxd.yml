@@ -191,13 +191,13 @@
       register: user_group_update
 
     - name: 8. Listar imágenes LXD locales en el host
-      ansible.builtin.command: 'sg lxd -c "lxc image list -f csv -c l"'
+      ansible.builtin.command: 'lxc image list -f csv -c l'
       register: image_list
       changed_when: false
       become: false
 
     - name: 9. Descargar e importar la imagen base Ubuntu 26.04 VM en LXD
-      ansible.builtin.command: 'sg lxd -c "lxc image copy ubuntu:26.04 local: --alias k8s-template --vm"'
+      ansible.builtin.command: 'lxc image copy ubuntu:26.04 local: --alias k8s-template --vm'
       when: "'k8s-template' not in image_list.stdout_lines"
       changed_when: true
       become: false

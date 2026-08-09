@@ -40,7 +40,7 @@
       when: lxc_check.rc != 0
 
     - name: Listar imágenes LXD locales
-      ansible.builtin.command: sg lxd -c "lxc image list -f csv -c l"
+      ansible.builtin.command: lxc image list -f csv -c l
       register: image_list
       changed_when: false
 
@@ -50,7 +50,7 @@
       when: lxd_image not in image_list.stdout_lines
 
     - name: Listar redes LXD
-      ansible.builtin.command: sg lxd -c "lxc network list -f csv"
+      ansible.builtin.command: lxc network list -f csv
       register: network_list
       changed_when: false
     - name: Fallar si no existe la red gestionada
