@@ -109,9 +109,15 @@
         - "'already exists' not in host_add_out.stderr"
       changed_when: "'Added host' in host_add_out.stdout"
 
+    - name: Comprobar si ya existe la especificación osd.all-available-devices
+      ansible.builtin.command: ceph orch ls --service-name osd.all-available-devices --format json
+      register: osd_spec_check
+      changed_when: false
+      failed_when: false
+
     - name: Activar escaneo de dispositivos y creación automática de OSDs en discos vacíos (/dev/vdb)
       ansible.builtin.command: ceph orch apply osd --all-available-devices
-      changed_when: true
+      changed_when: "'No services reported' in osd_spec_check.stdout"
 
     - name: Esperar a que se aprovisionen los OSDs (mínimo 3 OSDs listos)
       ansible.builtin.command: ceph osd stat -f json

@@ -92,7 +92,7 @@
       ansible.builtin.command: >
         ceph orch device ls {{ item }} --refresh
       loop: "{{ groups['new_ceph_osds'] | default([]) }}"
-      changed_when: true
+      changed_when: false
 
     - name: Esperar a que se aprovisione el OSD en el/los nuevo(s) nodo(s)
       ansible.builtin.command: ceph osd tree -f json
