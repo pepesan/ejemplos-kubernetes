@@ -91,7 +91,8 @@
         host: "{{ hostvars[item].ansible_host }}"
         port: 22
         delay: 2
-        timeout: 60
+        timeout: 90
+        search_regex: "^SSH-"
       loop: "{{ groups['new_workers'] }}"
 
     - name: Registrar dinámicamente los nuevos hosts en los grupos de Ansible
