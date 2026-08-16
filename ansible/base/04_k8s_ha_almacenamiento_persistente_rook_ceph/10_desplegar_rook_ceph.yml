@@ -54,41 +54,6 @@
         kubectl --kubeconfig={{ kubeconfig_path }} rollout status deployment/rook-ceph-operator -n rook-ceph --timeout=180s
       changed_when: false
 
-    - name: Agregar el repositorio de Ceph CSI Operator a Helm
-      kubernetes.core.helm_repository:
-        name: ceph-csi-operator
-        repo_url: https://ceph.github.io/ceph-csi-operator
-        force_update: true
-
-    - name: Instalar o actualizar los controladores y plugins de Ceph CSI usando Helm
-      kubernetes.core.helm:
-        name: ceph-csi-drivers
-        chart_ref: ceph-csi-operator/ceph-csi-drivers
-        chart_version: "{{ ceph_csi_chart_version }}"
-        release_namespace: rook-ceph
-        kubeconfig: "{{ kubeconfig_path }}"
-        values:
-          operatorConfig:
-            namespace: rook-ceph
-            driverSpecDefaults:
-              imageSet:
-                name: rook-csi-operator-image-set-configmap
-              nodePlugin:
-                priorityClassName: system-node-critical
-              controllerPlugin:
-                priorityClassName: system-cluster-critical
-          drivers:
-            rbd:
-              enabled: true
-              name: rook-ceph.rbd.csi.ceph.com
-            cephfs:
-              enabled: true
-              name: rook-ceph.cephfs.csi.ceph.com
-            nfs:
-              enabled: false
-            nvmeof:
-              enabled: false
-
     - name: Crear archivo de valores temporal para el clúster de Rook Ceph
       ansible.builtin.copy:
         dest: "{{ rook_values_path }}"
@@ -195,13 +160,18 @@
                   activeCount: 1
                   activeStandby: true
               storageClass:
-                # No dejamos que el chart cree la StorageClass: con ceph-csi-operator, la
-                # StorageClass de CephFS necesita el clusterID del ClientProfile específico
-                # del subvolume group (no el "rook-ceph" genérico que usa el chart por
-                # defecto), o el aprovisionamiento falla con "volume not found". Ese
-                # ClientProfile se genera de forma asíncrona y con nombre no determinista,
-                # así que la creamos nosotros más abajo una vez lo localizamos.
-                enabled: false
+                enabled: true
+                name: ceph-filesystem
+                isDefault: false
+                reclaimPolicy: Delete
+                allowVolumeExpansion: true
+                parameters:
+                  csi.storage.k8s.io/provisioner-secret-name: rook-csi-cephfs-provisioner
+                  csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+                  csi.storage.k8s.io/controller-expand-secret-name: rook-csi-cephfs-provisioner
+                  csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+                  csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
+                  csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
         mode: '0644'
 
     - name: Instalar o actualizar el clúster Rook Ceph usando Helm
@@ -240,41 +210,14 @@
       delay: 10
       changed_when: false
 
-    - name: Esperar al ClientProfile de ceph-csi específico del subvolume group CephFS
+    - name: Esperar a que se aprovisione la StorageClass ceph-filesystem
       ansible.builtin.command: >
-        kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph get clientprofile
-        -o jsonpath='{.items[?(@.spec.cephFs.subVolumeGroup=="csi")].metadata.name}'
-      register: cephfs_client_profile
-      until: cephfs_client_profile.stdout | trim | length > 0
+        kubectl --kubeconfig={{ kubeconfig_path }} get storageclass ceph-filesystem
+      register: sc_fs_out
+      until: sc_fs_out.rc == 0
       retries: 30
       delay: 10
       changed_when: false
-
-    - name: Crear la StorageClass ceph-filesystem apuntando al ClientProfile correcto
-      kubernetes.core.k8s:
-        kubeconfig: "{{ kubeconfig_path }}"
-        state: present
-        definition:
-          apiVersion: storage.k8s.io/v1
-          kind: StorageClass
-          metadata:
-            name: ceph-filesystem
-          provisioner: rook-ceph.cephfs.csi.ceph.com
-          reclaimPolicy: Delete
-          allowVolumeExpansion: true
-          parameters:
-            clusterID: "{{ cephfs_client_profile.stdout | trim }}"
-            fsName: ceph-filesystem
-            pool: ceph-filesystem-data0
-            csi.storage.k8s.io/provisioner-secret-name: rook-csi-cephfs-provisioner
-            csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
-            csi.storage.k8s.io/controller-expand-secret-name: rook-csi-cephfs-provisioner
-            csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
-            csi.storage.k8s.io/controller-publish-secret-name: rook-csi-cephfs-provisioner
-            csi.storage.k8s.io/controller-publish-secret-namespace: rook-ceph
-            csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
-            csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
-
     - name: Esperar a que se cree el secreto de la contraseña del Ceph Dashboard
       ansible.builtin.command: >
         kubectl --kubeconfig={{ kubeconfig_path }} -n rook-ceph get secret rook-ceph-dashboard-password

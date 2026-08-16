@@ -10,6 +10,28 @@
 # succeed on the others only because that module was already loaded at the
 # host level and visible inside the container). Tagged so a container-based
 # test can skip it, same reasoning as requires_virtualization.
+# br_netfilter lives in a separate package on RHEL-family systems, not
+# "kernel-modules" — confirmed live that Rocky Linux 10 doesn't ship it by
+# default: "modprobe br_netfilter" fails with "Module br_netfilter not
+# found" until this is installed. Pinning the exact running kernel version
+# (not the bare package name) matters: "dnf install kernel-modules-extra"
+# alone resolves the newest version in the repo, which can be newer than
+# the kernel actually booted in the base image — modules from one kernel
+# version don't load under another. Tagged requires_virtualization, same
+# reasoning as the modprobe task below: a lightweight container shares the
+# HOST's kernel (confirmed live: inside a test container, ansible_facts.
+# kernel reports the physical host's own kernel version, for which no
+# matching Rocky/Fedora package could ever exist — "No package
+# kernel-modules-extra-<host-kernel> available"), so this is meaningless
+# there. Same package name on Fedora too (already installed there by
+# default, so this entry is a harmless idempotent no-op on that distro).
+- name: Install kernel-modules-extra (RHEL family only — br_netfilter lives there)
+  ansible.builtin.package:
+    name: "kernel-modules-extra-{{ ansible_facts.kernel }}"
+    state: present
+  when: ansible_facts.os_family == 'RedHat'
+  tags: [requires_virtualization]
+
 - name: Load required kernel modules
   community.general.modprobe:
     name: "{{ item }}"

@@ -22,6 +22,21 @@ yet (explicit decision: build the roles standalone first, migrate later).
   (`_debian.yml`/`_redhat.yml` dispatch), so Longhorn nodes on those distros are currently missing a
   requirement Longhorn needs to actually attach volumes, not just an install-time nuisance.
 
+- **[PENDIENTE] `lxd_machine_provision` usa `community.general.lxd_container`/`lxd_storage_volume_info`
+  sin `url:` explícito** — funcionan sin cambios en openSUSE Tumbleweed una vez aplicado el symlink de
+  socket del punto anterior (confirmado en vivo contra `ansible/base`), así que no necesitan tocarse en
+  sí mismos; solo depende de que `lxd_host_bootstrap` cree ese symlink primero.
+
+- **[PENDIENTE] Los 14 laboratorios de `ansible/base/` (01-14) no se han vuelto a probar de punta a
+  punta desde la sesión de validación multidistro del bootstrap (2026-08-15)** — todos comparten el
+  mismo patrón `community.general.lxd_container` en `02_crear_nodos.yml`, ya confirmado en vivo que
+  funciona sin cambios en openSUSE Tumbleweed a través del symlink de socket, pero ningún laboratorio
+  completo (creación de nodos + despliegue de k8s + verificación) se ha ejecutado todavía con un HOST
+  físico/de control distinto de Ubuntu. Su última validación registrada en `../base/PLAN.md` es de
+  julio de 2026, antes de que existieran los fixes de bootstrap multidistro de agosto. Plan: probarlos
+  uno a uno (empezando por el 01, el más simple) con el host de control en cada una de las 10 distros,
+  documentando aquí cualquier bug nuevo encontrado.
+
 ## Status
 
 - ✅ **`lxd_machine_provision`** (implemented and validated with real Molecule, 2026-07-18): provisions LXD instances — **VMs or containers, indistinctly** (`lxd_instance_type`, per group or per host) — with given specs (CPU/RAM/disk), independent of whatever gets installed inside afterwards. Faithfully reproduces `02_crear_nodos.yml` (creation, waiting for the LXD agent, injecting the host's SSH key, waiting for SSH), generalizing the instance type (the original only ever created VMs). A full `molecule test` (syntax, converge, native `idempotence`, verify, destroy) passes in both scenarios (`default`=VM, `container`), leaving no residue.
@@ -35,6 +50,39 @@ yet (explicit decision: build the roles standalone first, migrate later).
   6. The `lxd` group (added to in `user_group.yml`) is created by the `lxd` snap package itself, so it doesn't exist once `snap_packages` is skipped — Ubuntu's base images happen to predefine it anyway, but Debian's don't (confirmed live: this task only failed on the Debian test containers, with `"Group lxd does not exist"`). Tagged `requires_virtualization` as well.
   7. Rocky Linux 9 support (added 2026-07-18): a live probe against a throwaway Rocky 9 test container confirmed `ansible.builtin.apt` (used directly for the package-install task) doesn't exist at all on RHEL-family systems — it failed immediately, with Ansible even attempting to auto-install a bogus `python3-apt` dependency first. Fixed by switching to the generic `ansible.builtin.package` module (auto-detects `dnf`) and splitting the package list per OS family (`vars/Debian.yml`, `vars/RedHat.yml` — identical lists except `python3-yaml` is `python3-pyyaml` on RHEL-family), loaded via `include_vars`. Rocky/RHEL/CentOS also need EPEL enabled first (`epel-release`, guarded to exclude Fedora, whose own repos already carry everything needed) for `snapd`/`python3-kubernetes`/`python3-jsonpatch` to resolve. Fedora 43/44 and Rocky 9 declared in `meta/main.yml`; Rocky 10 also declared and, once a local container image became available the same day (see the `lxd_machine_provision` entry above), included in the container-format smoke test below too — same package-install/EPEL logic confirmed live to pass there as well.
   8. **openSUSE Leap/Tumbleweed support (added 2026-08-02):** openSUSE has no `snapd` package published at all (confirmed live: `zypper search snapd` returns nothing) — `vars/Suse.yml` uses the version-independent `python3dist(...)` zypper capability syntax instead of a `python3-*` name (openSUSE versions those by Python release, e.g. `python313-kubernetes`; even resolves `python313-PyYAML`, whose real name doesn't match `pyyaml` case-wise). `snap_packages.yml` installs LXD and `helm` from their own native zypper packages instead of snap, `kubectl` via the same official-binary-plus-checksum method `ansible/base/00_instalar_ansible.sh` uses everywhere (no native package), and explicitly enables+starts `lxd.service` (ships disabled by default, unlike the snap flavor's automatic socket activation). Also hit a real bug in the very first task of the role: openSUSE's base image ships with neither `ssh-keygen` nor a `cryptography` library new enough for `openssh_keypair`'s fallback, failing immediately with `"Cannot find either the OpenSSH binary in the PATH or cryptography >= 3.3 installed on this system"` — fixed by installing `openssh-clients` first, guarded to `os_family == 'Suse'` only.
+  9. **Re-propagated and re-validated, 2026-08-15**, after `ansible/base/00_bootstrap_host_lxd.yml`'s own
+     multidistro session found real drift between this role and that playbook (see that file's
+     `README.md`/`PLAN.md` "Lecciones Aprendidas" for the original live findings): (a) openSUSE
+     Tumbleweed retired the `lxd` package in favor of `incus` — `snap_packages.yml` now distinguishes
+     Leap (native `lxd`, unchanged) from Tumbleweed (`incus`+`iptables`, `lxc`/`lxd` compat symlinks to
+     `incus`/`incusd`, `incus.socket`+`incus` service, and a `/var/lib/lxd/unix.socket` →
+     `/run/incus/unix.socket` symlink so `community.general.lxd_container`/`lxd_storage_volume_info`
+     keep working unmodified everywhere they're used) via a new `lxd_uses_incus` var
+     (`ansible_facts.distribution == 'openSUSE Tumbleweed'`); (b) EPEL's `snapd` package doesn't
+     auto-activate `snapd.socket` on RedHat family, unlike Debian/Ubuntu/Fedora's — new task in
+     `packages.yml` enables it explicitly, or the LXD snap install hangs forever; (c) `br_netfilter`
+     lives in the separate `kernel-modules-extra` package on RHEL-family, not installed by default on
+     Rocky Linux 10 — added to `kernel_modules.yml` (not the generic `vars/RedHat.yml` package list:
+     confirmed live this breaks the container-based smoke test, since a lightweight container reports
+     its *host's* kernel version via `ansible_facts.kernel`, for which no matching Rocky/Fedora package
+     could ever exist — kept tagged `requires_virtualization`, pinned to the exact running kernel
+     version to avoid installing modules for a different kernel than the one actually booted); (d)
+     `ansible_galaxy_install`'s `state: latest` forces a Galaxy API+cache round-trip on every run
+     (confirmed live: fragile, "Missing expected 'results' in ansible-galaxy cache"), and the `state`
+     parameter doesn't even exist in the older `community.general` that `pipx` resolves on Rocky 9's
+     Python 3.9 — parameter removed entirely; (e) `lxd_init.yml`/`base_image.yml` (`sg {{
+     lxd_group_name }} -c "..."`) can transiently/deterministically lose `lxc`/`lxd` from `PATH` for the
+     same `lookup`/session-timing reason as `ansible/base` — explicit `/snap/bin`/`/var/lib/snapd/snap/bin`
+     added to `environment: PATH`, plus generous `retries`/`until` (up to 3 min) on the snap install and
+     network check/init, covering the confirmed-live snapd self-restart-after-first-install race. Also
+     found and fixed in passing: `ssh_keypair.yml` never ensured `~/.ssh` existed first (confirmed live
+     on openSUSE Tumbleweed: `openssh_keypair` failed with "The directory ... does not exist" — not
+     every distro's fresh user account gets one for free). Re-validated: full container-based smoke
+     test (`test_lxd_host_bootstrap_distros.sh`) passes `failed=0` on all 10 distros; the
+     `requires_virtualization`-tagged tasks it structurally can't cover (`lxd_init`/`snap_packages`/
+     `base_image`) additionally re-run for real against fresh VMs on the three distros with the newest
+     changes (openSUSE Tumbleweed, openSUSE Leap 16.0, Rocky Linux 9) — `lxdbr0` created and
+     `k8s-template` imported successfully on all three.
 
   Validated end to end via a dedicated multi-distro smoke test (`ansible/scripts/test_lxd_host_bootstrap_distros.sh` — see [`../scripts/README.md`](../scripts/README.md)): spins up one throwaway LXD container per distro declared in `meta/main.yml` (Ubuntu 24.04/26.04, Debian 12/13, Rocky Linux 9/10, Fedora 43/44, openSUSE Leap 16.0/Tumbleweed — all ten as of 2026-08-02, once a local container image made `rocky-10` includable too), connects via the `community.general.lxd` connection plugin (`lxc exec`, no SSH — real usage is always `connection: local`, so SSH was never actually part of the role's requirements), and runs the role with `--forks 10` (so all 10 hosts run in one batch instead of Ansible's default-5 splitting them into two) skipping everything tagged `requires_virtualization`/`requires_ansible_control_node`. **Passes cleanly (`failed=0`) on all ten distros**, covering the genuinely distro-sensitive logic: the SSH keypair task (incl. the openSUSE `ssh-keygen` fix above), the package install via `ansible.builtin.package` (confirming `snapd`/`curl`/`python3-kubernetes`/`python3-jsonpatch`/`python3-yaml`(`-pyyaml` on RHEL-family, `python3dist(...)` on Suse) all resolve on every family), the EPEL-enablement step (only runs on Rocky, correctly skipped everywhere else including Fedora), and kernel module config persistence. The skipped tasks (snap/LXD install, `lxd_init`, base image import, the `lxd` group, Galaxy collections) remain to be validated for real via `molecule test` with actual `sudo` — see below.
 - 🟢 **`k8s_ha_cluster`** (implemented and validated across the full CNI×CSI×topology matrix, 2026-07-18): given a set of already-provisioned/bootstrapped instances, stands up the full HA cluster (kubeadm + kube-vip). Faithfully extracted from `base/02_k8s_base_ha_3_managers_3_workers` (OS prep, containerd, kubeadm tools, kubeadm init/join HA, kube-vip, Headlamp) plus the CSI backends from `base/03`/`base/04` and the Cilium CNI from `base/08` (reused identically by labs 10-14) — all of it already ran for real as part of those labs, so the ported logic is proven. Component selection follows the task-file-indexed-by-name pattern this very document already recommended (`cni: flannel|cilium` → `tasks/cni/<name>.yml`, `csi: none|longhorn|rook_ceph` → `tasks/csi/<name>.yml`), not booleans. Scoped down from the original backlog line by explicit user decision: the Ceph-externo CSI backend is built separately, as `ceph_external_cluster` + `k8s_ceph_external_csi` (see below) rather than a 4th `k8s_ha_cluster_csi` value — it depends on an already-existing external Ceph cluster, the odd one out among the three; node add/remove stays in `k8s_node_scale_cycle` below, not here.

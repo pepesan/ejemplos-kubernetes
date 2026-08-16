@@ -3,6 +3,14 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  # PATH explícito con los directorios de binarios de snap: mismo motivo que
+  # en 00_bootstrap_host_lxd.yml -- "/snap/bin" (Debian/Ubuntu) y
+  # "/var/lib/snapd/snap/bin" (Fedora/RHEL) pueden faltar tanto en el PATH
+  # capturado por "lookup('env','PATH')" (si esta comprobación se ejecuta en
+  # la misma sesión que instaló snapd) como en el secure_path de sudo bajo
+  # become en Debian.
+  environment:
+    PATH: "{{ lookup('env', 'PATH') }}:/snap/bin:/var/lib/snapd/snap/bin"
   vars:
     lxd_network: "lxdbr0"
     lxd_image: "k8s-template"
@@ -19,17 +27,42 @@
         type: ed25519
         comment: "k8s-lxd-host-key"
 
-    - name: Asegurar que las colecciones necesarias de Ansible Galaxy estén instaladas y actualizadas
+    - name: Asegurar que las colecciones necesarias de Ansible Galaxy estén instaladas
+      # Sin "state:" -- ambos motivos:
+      # 1. "state: latest" fuerza --upgrade en CADA ejecución, disparando
+      #    una llamada a la API de Galaxy y su caché local de respuestas —
+      #    confirmado en vivo que esa ruta de código es frágil y puede
+      #    fallar con "Missing expected 'results' in ansible-galaxy cache"
+      #    (bug conocido de ansible-galaxy), incluso cuando la colección ya
+      #    está instalada por la tarea 1c de 00_bootstrap_host_lxd.yml.
+      # 2. "state: present" (el valor por defecto en community.general
+      #    reciente) directamente NO EXISTE como parámetro en versiones más
+      #    antiguas del módulo -- confirmado en vivo en Rocky Linux 9, cuyo
+      #    Python 3.9 (del sistema) resuelve una versión de pipx bastante
+      #    más vieja de Ansible/community.general (7.5.2) que no reconoce
+      #    "state" en absoluto: "Unsupported parameters ... Supported
+      #    parameters include: ack_ansible29, ..., name, no_deps, ...". Omitir
+      #    el parámetro por completo es compatible con ambas versiones: el
+      #    comportamiento por defecto en las dos es "instalar si falta, sin
+      #    tocar red/caché si ya está".
       community.general.ansible_galaxy_install:
         name: "{{ item }}"
         type: collection
-        state: latest
       loop:
         - community.general
         - kubernetes.core
 
     - name: Comprobar que existe el comando lxc
-      ansible.builtin.command: which lxc
+      # "command -v" (builtin de shell) en vez de "which": confirmado en
+      # vivo que la imagen mínima de Rocky Linux 10 no trae instalado el
+      # paquete "which" en absoluto -- "ansible.builtin.command: which lxc"
+      # fallaba con rc=2 y stdout/stderr vacíos (el propio "which" no se
+      # encontraba). "command -v" es un builtin de /bin/sh disponible en
+      # cualquier sistema POSIX, sin depender de un paquete externo --
+      # requiere "ansible.builtin.shell" (pasa por /bin/sh -c), ya que
+      # "ansible.builtin.command" ejecuta el argv directamente sin shell y
+      # no reconocería "command" como builtin.
+      ansible.builtin.shell: command -v lxc
       register: lxc_check
       changed_when: false
       failed_when: false
@@ -40,9 +73,16 @@
       when: lxc_check.rc != 0
 
     - name: Listar imágenes LXD locales
+      # become: true: el usuario puede haber sido añadido al grupo "lxd" en
+      # esta misma sesión (01_bootstrap_host.sh recién ejecutado) — ese
+      # cambio de grupo no aplica al proceso actual sin una nueva sesión de
+      # login. root accede al socket de LXD sin depender de esa pertenencia
+      # (DAC override), evitando el fallo "permission denied" que se daba
+      # aquí justo después de un bootstrap en la misma terminal.
       ansible.builtin.command: lxc image list -f csv -c l
       register: image_list
       changed_when: false
+      become: true
 
     - name: Fallar si la imagen base no existe
       ansible.builtin.fail:
@@ -50,9 +90,12 @@
       when: lxd_image not in image_list.stdout_lines
 
     - name: Listar redes LXD
+      # Mismo motivo que la tarea anterior.
       ansible.builtin.command: lxc network list -f csv
       register: network_list
       changed_when: false
+      become: true
+
     - name: Fallar si no existe la red gestionada
       ansible.builtin.fail:
         msg: "No existe la red '{{ lxd_network }}' en LXD. Por favor, ejecuta 01_bootstrap_host.sh primero."

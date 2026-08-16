@@ -11,6 +11,18 @@
     state: present
   when: ansible_facts.os_family == 'Suse'
 
+# Confirmed live (openSUSE Tumbleweed): a fresh user's home directory
+# doesn't necessarily already have ~/.ssh — openssh_keypair below fails
+# with "The directory ... does not exist" without this. Every other
+# distro tested happened to already have it, but that was never guaranteed.
+- name: Ensure the target user's ~/.ssh directory exists
+  ansible.builtin.file:
+    path: "/home/{{ lxd_host_user }}/.ssh"
+    state: directory
+    mode: "0700"
+    owner: "{{ lxd_host_user }}"
+    group: "{{ lxd_host_user }}"
+
 # Required so the host can connect passwordless as root to every LXD
 # instance created later (the public half gets pushed into each instance by
 # lxd_machine_provision).

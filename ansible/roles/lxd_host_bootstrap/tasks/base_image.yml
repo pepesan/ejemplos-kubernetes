@@ -1,12 +1,24 @@
 ---
+# environment: PATH — same staleness reasoning as lxd_init.yml: this
+# task's controlling ansible-playbook process may have started before
+# snapd (installed earlier in this same run) added its own binary
+# directory to PATH. Confirmed live (Rocky Linux 9): "sg {{ lxd_group_name
+# }} -c ..." spawns a plain non-login subshell that doesn't re-source
+# /etc/profile.d, so it never picks up snapd's PATH addition on its own —
+# "lxc: command not found" (rc=127), even though the binary exists and
+# works fine when invoked with the right PATH.
 - name: List local LXD images
-  ansible.builtin.command: 'sg lxd -c "lxc image list -f csv -c l"'
+  ansible.builtin.command: 'sg {{ lxd_group_name }} -c "lxc image list -f csv -c l"'
   register: lxd_local_images
   changed_when: false
   become: false
+  environment:
+    PATH: "{{ ansible_facts.env.PATH }}:/snap/bin:/var/lib/snapd/snap/bin"
 
 - name: Copy and import the base image used by every lab instance
-  ansible.builtin.command: 'sg lxd -c "lxc image copy {{ lxd_base_image_remote }} local: --alias {{ lxd_base_image_alias }} --vm"'
+  ansible.builtin.command: 'sg {{ lxd_group_name }} -c "lxc image copy {{ lxd_base_image_remote }} local: --alias {{ lxd_base_image_alias }} --vm"'
   when: lxd_base_image_alias not in lxd_local_images.stdout_lines
   changed_when: true
   become: false
+  environment:
+    PATH: "{{ ansible_facts.env.PATH }}:/snap/bin:/var/lib/snapd/snap/bin"

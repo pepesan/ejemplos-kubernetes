@@ -3,10 +3,42 @@
   hosts: localhost
   connection: local
   become: true
+  # PATH explícito con los directorios de binarios de snap: "lookup('env',
+  # 'PATH')" congela el PATH del PROPIO PROCESO ansible-playbook en el
+  # momento en que arrancó -- en el flujo real (00_instalar_ansible.sh ->
+  # 01_bootstrap_host.sh -> este playbook, TODO en la misma sesión de
+  # shell), esa sesión se abrió ANTES de que la tarea 1b de abajo instalara
+  # snapd y su script /etc/profile.d que añade su directorio de binarios al
+  # PATH -- confirmado en vivo (Fedora 44, Debian 13) que por eso
+  # "lookup('env','PATH')" nunca lo incluye en una ejecución real de
+  # principio a fin (solo en una sesión nueva y posterior, como al probarlo
+  # a mano). No es una condición de carrera: es determinista en cada primer
+  # arranque. Además, sudo también resetea el PATH a su propio secure_path
+  # bajo become, que en Debian tampoco incluye estos directorios (a
+  # diferencia de Ubuntu, que lo añade vía el paquete lxd-installer). Se
+  # añaden ambas rutas conocidas de snap explícitamente: "/snap/bin"
+  # (Debian/Ubuntu) y "/var/lib/snapd/snap/bin" (Fedora/RHEL; en estas
+  # distros "/snap" ni siquiera existe como symlink).
+  environment:
+    PATH: "{{ lookup('env', 'PATH') }}:/snap/bin:/var/lib/snapd/snap/bin"
   vars:
     lxd_network_name: "lxdbr0"
     lxd_network_subnet: "10.207.154.1/24"
     lxd_storage_pool_name: "default"
+    # openSUSE Tumbleweed (rolling) retiró el paquete "lxd" de sus repos
+    # oficiales (confirmado en vivo, agosto 2026: solo publica "incus", el
+    # fork comunitario de LXD -- mismo linaje, API REST y CLI compatibles).
+    # openSUSE Leap 16.0 (estable), en cambio, SÍ sigue publicando "lxd"
+    # nativo con el remoto "ubuntu:" ya configurado de fábrica, igual que el
+    # snap -- confirmado en vivo, no puede tratarse toda la familia Suse por
+    # igual. Estas 4 variables aíslan las diferencias de nombres/comandos
+    # entre ambas variantes en el resto del playbook, que por lo demás usa
+    # siempre los comandos "lxc"/"lxd" sin condicionales (ver symlinks de
+    # compatibilidad en la tarea 4c, solo necesarios en Tumbleweed).
+    lxd_uses_incus: "{{ ansible_facts.distribution == 'openSUSE Tumbleweed' }}"
+    lxd_init_cmd: "{{ 'incus admin init' if lxd_uses_incus else 'lxd init' }}"
+    lxd_group_name: "{{ 'incus-admin' if lxd_uses_incus else 'lxd' }}"
+    lxd_ubuntu_image_remote: "{{ 'images:ubuntu/' if lxd_uses_incus else 'ubuntu:' }}"
     host_user: "{{ lookup('env', 'USER') }}"
     # Multidistribución (mismas distros que 00_instalar_ansible.sh), verificado en
     # vivo. "python3-yaml" se llama "python3-pyyaml" en la familia RedHat. openSUSE
@@ -28,6 +60,21 @@
         - python3-kubernetes
         - python3-jsonpatch
         - python3-pyyaml
+        # br_netfilter (necesario en la tarea 2 de más abajo) vive en este
+        # paquete, no en "kernel-modules" -- confirmado en vivo que Rocky
+        # Linux 10 no lo trae instalado por defecto: "modprobe br_netfilter"
+        # falla con "Module br_netfilter not found" hasta instalarlo. Se fija
+        # la versión EXACTA del kernel en ejecución ("ansible_facts.kernel",
+        # equivalente a "uname -r") en vez del nombre genérico del paquete:
+        # confirmado en vivo que un "dnf install kernel-modules-extra" sin
+        # más instala la versión más reciente del repo, que puede no
+        # coincidir con el kernel realmente arrancado en la imagen base (los
+        # módulos de una versión no cargan en un kernel distinto) -- dnf
+        # SÍ resuelve el paquete exacto correctamente cuando se le da la
+        # versión completa. Mismo nombre de paquete en Fedora (aunque ahí ya
+        # viene instalado de fábrica junto con el resto de kernel-modules,
+        # así que esta entrada es idempotente/no-op inofensiva allí).
+        - "kernel-modules-extra-{{ ansible_facts.kernel }}"
       Suse:
         - curl
         - "python3dist(kubernetes)"
@@ -86,11 +133,25 @@
         state: present
         update_cache: true
 
-    - name: 1c. Asegurar que las colecciones necesarias de Ansible Galaxy estén instaladas y actualizadas en el host
-      community.general.ansible_galaxy_install:
-        name: "{{ item }}"
-        type: collection
-        state: latest
+    - name: "1b2. Asegurar que el socket de snapd está habilitado y arrancado (familia RedHat: Rocky/RHEL/CentOS)"
+      # Confirmado en vivo (Rocky Linux 9): el paquete "snapd" de EPEL, a
+      # diferencia del de Debian/Ubuntu/Fedora, NO activa "snapd.socket"
+      # automáticamente al instalarse (queda "disabled"/"inactive"). Sin
+      # esto, la tarea 4a de abajo ("snap install lxd") se queda colgada
+      # indefinidamente intentando hablar con /run/snapd.socket, que nunca
+      # llega a existir -- ni siquiera los reintentos de esa tarea lo
+      # arreglan, porque el problema no es una carrera temporal sino que el
+      # socket nunca se activa por sí solo en esta distro.
+      ansible.builtin.systemd:
+        name: snapd.socket
+        enabled: true
+        state: started
+      when: ansible_facts.os_family == 'RedHat'
+
+    - name: 1c. Instalar colecciones Ansible Galaxy (ansible_galaxy_install deprecated)
+      ansible.builtin.command:
+        cmd: "ansible-galaxy collection install {{ item }}"
+        creates: "{{ ansible_facts.env.HOME }}/.ansible/collections/ansible_collections/{{ item | regex_replace('.', '/') }}"
       loop:
         - community.general
         - kubernetes.core
@@ -118,40 +179,153 @@
       # kubectl y helm ya no se instalan aquí: 00_instalar_ansible.sh los instala
       # a partir de sus binarios oficiales (mismo método en cualquier distro, no solo
       # las que tienen snapd), y ese script se ejecuta antes que este playbook.
+      # retries/until: confirmado en vivo (Debian 13) que justo tras instalar
+      # snapd por primera vez, éste se autoactualiza a su propia snap interna
+      # y se reinicia (versión salta p.ej. de 2.68.3 a 2.76.2 en el journal) —
+      # si "snap info lxd" (usado internamente por este módulo para resolver
+      # el nombre) cae justo en esa ventana de reinicio, community.general.snap
+      # lo malinterpreta como salida vacía y falla con la excepción interna
+      # "list index out of range" (bug conocido: solo distingue el caso
+      # "warning: no snap found", cualquier otro fallo de "snap info" lo
+      # asiente tras el reinicio. retries=12/delay=15 (3 min de margen total):
+      # confirmado en vivo (Fedora 44) que la ventana de inestabilidad de
+      # snapd/lxd recién instalado puede durar varios minutos, no solo
+      # segundos -- un presupuesto de reintentos corto (probado primero con
+      # 5×10s=50s) no siempre basta.
       community.general.snap:
         name: lxd
         state: present
       when: ansible_facts.os_family != 'Suse'
+      register: lxd_snap_install
+      retries: 12
+      delay: 15
+      until: lxd_snap_install is succeeded
 
-    - name: 4b. Instalar LXD a través del paquete nativo de zypper (solo openSUSE, que no publica snapd)
-      # Confirmado en vivo: "zypper search snapd" no devuelve nada en openSUSE; en
-      # cambio sí existe un paquete "lxd" nativo (mismo LXD genuino de upstream,
-      # solo que empaquetado para SUSE).
+    - name: 4b1. Instalar LXD nativo a través de zypper (solo openSUSE Leap)
+      # openSUSE Leap (estable), a diferencia de Tumbleweed, SÍ sigue
+      # publicando el paquete "lxd" nativo -- confirmado en vivo (Leap
+      # 16.0), con el remoto "ubuntu:" ya configurado de fábrica igual que
+      # el snap, así que no necesita compat de nombres ni symlinks (tareas
+      # 4c/4e/4f, exclusivas de Tumbleweed/incus).
       ansible.builtin.package:
         name: lxd
         state: present
-      when: ansible_facts.os_family == 'Suse'
+      when: ansible_facts.os_family == 'Suse' and not lxd_uses_incus
 
-    - name: 4c. Asegurar que el servicio systemd de lxd está habilitado y arrancado (solo openSUSE)
-      # A diferencia del snap (que se autoactiva vía su unidad de socket), el
-      # lxd.service nativo de openSUSE viene deshabilitado por defecto —
-      # confirmado en vivo: "lxc list" falla con "LXD unix socket ... not found"
-      # hasta que se ejecuta esto. Necesario antes de poder inicializar LXD abajo.
+    - name: 4b2. Asegurar que el servicio systemd de lxd está habilitado y arrancado (solo openSUSE Leap)
+      # A diferencia del snap (que se autoactiva vía su propia unidad de
+      # socket), el paquete nativo necesita que se habilite explícitamente
+      # -- confirmado en vivo: "lxc list" falla con "LXD unix socket ...
+      # not found" hasta que se ejecuta esto.
       ansible.builtin.systemd:
         name: lxd
         enabled: true
         state: started
-      when: ansible_facts.os_family == 'Suse'
+      when: ansible_facts.os_family == 'Suse' and not lxd_uses_incus
+
+    - name: 4c1. Instalar Incus a través de zypper (solo openSUSE Tumbleweed, que ya no publica el paquete "lxd")
+      # openSUSE Tumbleweed retiró el paquete "lxd" de sus repos oficiales
+      # (confirmado en vivo, agosto 2026: "zypper se -s lxd" solo devuelve
+      # lxd-ovmf-setup-* y "lxde" -- el escritorio LXDE, nada relacionado).
+      # Solo publica "incus", el fork comunitario de LXD (mismo linaje,
+      # mantenido por antiguos desarrolladores de Canonical, API REST y CLI
+      # compatibles). "iptables" es una dependencia real no resuelta
+      # automáticamente por el paquete "incus": confirmado en vivo que sin
+      # ella, "incus admin init --preseed" falla al crear el firewall de la
+      # red gestionada ("iptables: executable file not found in $PATH").
+      ansible.builtin.package:
+        name:
+          - incus
+          - iptables
+        state: present
+      when: lxd_uses_incus
+
+    - name: 4c2. Crear symlinks de compatibilidad lxc/lxd -> incus/incusd (solo openSUSE Tumbleweed)
+      # El resto de este playbook (y todos los labs/roles del proyecto)
+      # invocan los comandos "lxc"/"lxd" directamente. incus mantiene su CLI
+      # intencionadamente compatible con la sintaxis clásica de lxc (image,
+      # network, exec, launch...) -- confirmado en vivo que "lxc image copy",
+      # "lxc network show" y "lxc launch --vm" funcionan igual a través de un
+      # symlink simple. La única excepción real es la inicialización del
+      # daemon (ver "lxd_init_cmd" en las vars del play y la tarea 6:
+      # "incus admin init" es un subcomando del binario cliente "incus", a
+      # diferencia de "lxd init" que es un subcomando del propio daemon).
+      ansible.builtin.file:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        state: link
+        force: true
+      loop:
+        - { src: /usr/bin/incus, dest: /usr/local/bin/lxc }
+        - { src: /usr/sbin/incusd, dest: /usr/local/bin/lxd }
+      when: lxd_uses_incus
+
+    - name: 4c3. Asegurar que el servicio systemd de incus está habilitado y arrancado (solo openSUSE Tumbleweed)
+      # A diferencia del snap de LXD (que se autoactiva vía su propia unidad
+      # de socket), el paquete nativo necesita que se habilite explícitamente.
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - incus.socket
+        - incus
+      when: lxd_uses_incus
+
+    - name: 4c4. Enlazar el socket por defecto de LXD al de incus (solo openSUSE Tumbleweed)
+      # Los módulos nativos de Ansible "community.general.lxd_container" /
+      # "lxd_storage_volume_info" (usados en TODOS los labs de este
+      # proyecto, ~50 apariciones, para crear/destruir/consultar las VMs de
+      # cada nodo k8s) hablan la API REST de LXD directamente contra
+      # "unix:/var/lib/lxd/unix.socket" por defecto, sin exponer ninguna
+      # variable de entorno para cambiarlo -- solo aceptan una ruta fija por
+      # parámetro "url:", que ningún lab pasa hoy. En vez de tocar cada una
+      # de esas ~50 tareas, se enlaza el socket por defecto de LXD al socket
+      # real de incus ("/run/incus/unix.socket") -- confirmado en vivo que,
+      # gracias a que incus mantiene su API REST compatible con la de LXD,
+      # "community.general.lxd_container"/"lxd_storage_volume_info" 100%
+      # funcionales sin ningún cambio en los labs, atravesando este symlink.
+      # openSUSE Leap no necesita esto: su "lxd" nativo ya usa esta misma
+      # ruta de socket de forma directa, sin ningún symlink de por medio.
+      ansible.builtin.file:
+        path: /var/lib/lxd
+        state: directory
+        mode: '0755'
+      when: lxd_uses_incus
+
+    - name: 4c5. Enlazar el fichero de socket (solo openSUSE Tumbleweed)
+      ansible.builtin.file:
+        src: /run/incus/unix.socket
+        dest: /var/lib/lxd/unix.socket
+        state: link
+        force: true
+      when: lxd_uses_incus
 
     - name: 5. Comprobar si LXD ya está inicializado
+      # retries/until: mismo motivo que la tarea 4a -- confirmado en vivo
+      # (Fedora 44) que justo tras "snap install lxd", el binario "lxd" (un
+      # symlink que snapd crea en /var/lib/snapd/snap/bin o /snap/bin según
+      # la distro) puede tardar un instante en estar disponible/ejecutable,
+      # incluso con el PATH ya correcto -- "lxc: command not found" (rc=127)
+      # transitorio. failed_when: false ya evita que esto rompa la tarea,
+      # pero sin reintento un 127 transitorio se confunde con "127 != 0" y
+      # dispara la tarea 6 innecesariamente incluso si la red ya existía.
       ansible.builtin.command: lxc network show "{{ lxd_network_name }}"
       register: lxd_net_check
       changed_when: false
       failed_when: false
+      retries: 12
+      delay: 15
+      until: lxd_net_check.rc != 127
 
     - name: 6. Inicializar LXD mediante Preseed (Configuración no interactiva)
+      # retries/until: mismo motivo que la tarea 5 -- confirmado en vivo
+      # (Fedora 44) que "lxd init --preseed" puede fallar con "lxd: command
+      # not found" (rc=127) justo tras instalar el snap, aunque el PATH del
+      # play ya apunte al directorio correcto -- el propio binario/symlink
+      # tarda un instante en estar listo.
       ansible.builtin.shell: |
-        cat <<EOF | lxd init --preseed
+        cat <<EOF | {{ lxd_init_cmd }} --preseed
         config: {}
         networks:
         - config:
@@ -182,25 +356,51 @@
         EOF
       when: lxd_net_check.rc != 0
       changed_when: true
+      register: lxd_init_result
+      retries: 12
+      delay: 15
+      until: lxd_init_result is succeeded
 
-    - name: 7. Añadir el usuario del host al grupo lxd para permitir comandos lxc sin sudo
+    - name: 7. Añadir el usuario del host al grupo lxd/incus-admin para permitir comandos lxc sin sudo
       ansible.builtin.user:
         name: "{{ host_user }}"
-        groups: lxd
+        groups: "{{ lxd_group_name }}"
         append: true
       register: user_group_update
 
     - name: 8. Listar imágenes LXD locales en el host
+      # become: true (heredado del play): la tarea 7 acaba de añadir al usuario
+      # al grupo "lxd", pero ese cambio de grupo NO aplica a la sesión actual
+      # de Ansible hasta un nuevo login (confirmado en vivo: con become: false
+      # aquí, esta tarea fallaba con "permission denied" en el socket de LXD
+      # incluso justo después de la tarea 7). root sí tiene acceso al socket
+      # sin depender de la pertenencia a "lxd" (DAC override).
       ansible.builtin.command: 'lxc image list -f csv -c l'
       register: image_list
       changed_when: false
-      become: false
 
-    - name: 9. Descargar e importar la imagen base Ubuntu 26.04 VM en LXD
-      ansible.builtin.command: 'lxc image copy ubuntu:26.04 local: --alias k8s-template --vm'
+    - name: 9. Descargar e importar la imagen base Ubuntu VM en LXD (26.04, con fallback a 24.04/22.04)
+      # Reemplaza "loop" + "until": esa combinación NO detiene el bucle tras el
+      # primer éxito ("until" solo reintenta el ítem actual, nunca salta los
+      # siguientes) — confirmado en vivo que descargaba las 3 versiones y el
+      # alias "k8s-template" terminaba en la ÚLTIMA descargada (22.04), justo
+      # lo contrario de la prioridad prevista (preferir 26.04). Un bucle bash
+      # con "break" real (aquí, salir del script al primer éxito) sí para en
+      # el primer éxito. Se omite por completo si "k8s-template" ya existe
+      # (idempotencia, reutilizando el listado de la tarea 8).
+      ansible.builtin.shell: |
+        set -o pipefail
+        for ver in 26.04 24.04 22.04; do
+          if lxc image copy "{{ lxd_ubuntu_image_remote }}${ver}" local: --alias k8s-template --vm; then
+            exit 0
+          fi
+        done
+        exit 1
+      args:
+        executable: /bin/bash
       when: "'k8s-template' not in image_list.stdout_lines"
-      changed_when: true
-      become: false
+      register: image_import_result
+      changed_when: image_import_result.rc == 0
 
     - name: 10. Mostrar recordatorio de permisos y herramientas
       ansible.builtin.debug:
@@ -212,7 +412,7 @@
           - "     {{ lxd_network_name }} ({{ lxd_network_subnet }})"
           - "  2. Imagen base VM Ubuntu 26.04 importada con alias 'k8s-template'"
           - "  "
-          - "  El usuario '{{ host_user }}' ha sido añadido al grupo 'lxd'."
-          - "  IMPORTANTE: Cierra y abre de nuevo tu terminal (o ejecuta 'newgrp lxd')"
+          - "  El usuario '{{ host_user }}' ha sido añadido al grupo '{{ lxd_group_name }}'."
+          - "  IMPORTANTE: Cierra y abre de nuevo tu terminal (o ejecuta 'newgrp {{ lxd_group_name }}')"
           - "  para aplicar los permisos del grupo y ejecutar comandos lxc sin sudo."
           - "════════════════════════════════════════════════════════════════"

@@ -1,13 +1,33 @@
 ---
+# environment: PATH — lookup('env', 'PATH')-equivalent staleness: this
+# role's own controlling ansible-playbook process may have started before
+# snapd (installed a few tasks earlier, in the same run) added its own
+# binary directory to PATH via /etc/profile.d — confirmed live (Fedora 44,
+# Debian 13) that this is deterministic, not a race, whenever
+# packages.yml/snap_packages.yml and this file run inside one continuous
+# session. sudo also resets PATH to its own secure_path under become, which
+# on Debian doesn't include /snap/bin either (unlike Ubuntu, which adds it
+# via the lxd-installer package). Both snap locations are added explicitly
+# so this doesn't depend on session timing or secure_path per distro.
+#
+# retries/until: confirmed live (Fedora 44) that "lxc network show"/"lxd
+# init --preseed" can transiently fail with "command not found" (rc=127)
+# right after the snap install above, even with the correct PATH in place
+# — the binary/symlink itself can take a moment to become available.
 - name: Check whether LXD is already initialized
   ansible.builtin.command: "lxc network show {{ lxd_network_name }}"
   register: lxd_network_check
   changed_when: false
   failed_when: false
+  environment:
+    PATH: "{{ ansible_facts.env.PATH }}:/snap/bin:/var/lib/snapd/snap/bin"
+  retries: 12
+  delay: 15
+  until: lxd_network_check.rc != 127
 
 - name: Initialize LXD via preseed (network, storage pool, default profile)
   ansible.builtin.shell: |
-    cat <<EOF | lxd init --preseed
+    cat <<EOF | {{ lxd_init_cmd }} --preseed
     config: {}
     networks:
     - config:
@@ -38,3 +58,9 @@
     EOF
   when: lxd_network_check.rc != 0
   changed_when: true
+  environment:
+    PATH: "{{ ansible_facts.env.PATH }}:/snap/bin:/var/lib/snapd/snap/bin"
+  register: lxd_init_result
+  retries: 12
+  delay: 15
+  until: lxd_init_result is succeeded

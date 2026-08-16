@@ -18,6 +18,19 @@
     state: present
     update_cache: true
 
+# Confirmed live (Rocky Linux 9): the EPEL "snapd" package, unlike
+# Debian/Ubuntu/Fedora's, does NOT activate "snapd.socket" automatically on
+# install (it stays "disabled"/"inactive"). Without this, the LXD snap
+# install in snap_packages.yml hangs indefinitely trying to reach
+# /run/snapd.socket, which never comes up on its own — not a timing issue
+# retries can fix, the socket genuinely never self-activates on this distro.
+- name: "Ensure the snapd socket is enabled and started (RedHat family: Rocky/RHEL/CentOS)"
+  ansible.builtin.systemd:
+    name: snapd.socket
+    enabled: true
+    state: started
+  when: ansible_facts.os_family == 'RedHat'
+
 # Explicitly targets lxd_host_user (see ssh_keypair.yml for why) so the
 # collections land in that user's ~/.ansible/collections, not root's, since
 # labs are run by that user directly, without sudo.
@@ -43,10 +56,21 @@
 # with "Failed to find required executable 'ansible-galaxy'" under
 # "sudo -E molecule test" without it.
 - name: Ensure required Ansible Galaxy collections are installed and up to date
+  # No "state:" (neither "latest" nor "present"): "latest" forces --upgrade
+  # on every run, which hits Galaxy's API and its local response cache —
+  # confirmed live that code path is fragile ("Missing expected 'results'
+  # in ansible-galaxy cache", a known ansible-galaxy bug) even when the
+  # collection is already installed. The "state" parameter itself doesn't
+  # even exist in older community.general versions that pip/pipx can
+  # resolve on a system with an old Python (confirmed live: Rocky Linux 9's
+  # system Python 3.9 resolves community.general 7.5.2 via "pipx install
+  # ansible", whose ansible_galaxy_install module rejects "state" outright
+  # as an unsupported parameter). Omitting it is compatible with both: the
+  # default behavior in both versions is "install if missing, don't touch
+  # network/cache if already present".
   community.general.ansible_galaxy_install:
     name: "{{ item }}"
     type: collection
-    state: latest
   loop: "{{ lxd_galaxy_collections }}"
   become: true
   become_user: "{{ lxd_host_user }}"

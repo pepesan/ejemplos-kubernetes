@@ -26,8 +26,11 @@ headlamp_chart_version: "0.43.0"
 # Versión del chart de Rook Ceph (operador de almacenamiento distribuido)
 rook_ceph_chart_version: "1.14.7"
 
-# Versión del chart de los drivers/plugins de Ceph CSI (ceph-csi-operator/ceph-csi-drivers)
-ceph_csi_chart_version: "1.0.4"
+# Versión del chart de Prometheus (monitoreo mínimo para Ceph Dashboard)
+prometheus_chart_version: "29.24.0"
+
+# Imagen de Ceph usada por Rook para los demonios de almacenamiento (mon, mgr, osd) y herramientas
+ceph_image: "quay.io/ceph/ceph:v18.2.4"
 
 # Tamaño de los PVC de prueba usados para verificar la persistencia (RBD y CephFS)
 rook_ceph_test_pvc_size: "1Gi"

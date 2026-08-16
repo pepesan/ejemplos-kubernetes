@@ -36,6 +36,15 @@
     force: true
   when: ansible_facts.os_family != 'Suse' and not lxd_snap_dir_stat.stat.exists
 
+# retries/until: confirmed live (Debian 13, Fedora 44) that right after
+# installing snapd for the first time, it self-updates to its own internal
+# snap and restarts (version jumping e.g. from 2.68.3 to 2.76.2 in the
+# journal) — if a snap operation lands exactly in that restart window,
+# community.general.snap misreads it as empty output and fails with an
+# internal exception ("list index out of range": the module only
+# recognizes the exact string "warning: no snap found", any other "snap
+# info" failure confuses it the same way). A generous retry budget (up to
+# 3 minutes total) gives snapd time to settle.
 - name: Install LXD, kubectl and helm via snap
   community.general.snap:
     name: "{{ item.name }}"
@@ -43,31 +52,98 @@
     classic: "{{ item.classic | default(omit) }}"
   loop: "{{ lxd_snap_packages }}"
   when: ansible_facts.os_family != 'Suse'
+  register: lxd_snap_install
+  retries: 12
+  delay: 15
+  until: lxd_snap_install is succeeded
 
-# openSUSE has no snapd package at all (see vars/Suse.yml), so LXD and helm
-# come from their own native zypper packages instead — both confirmed live
-# to exist and work (LXD 5.21.1, genuine upstream, just packaged for SUSE).
-# kubectl has no such native package, so it's installed the same way
-# ansible/base/00_instalar_ansible.sh already does on every distro: download
-# the official binary and verify it against its published sha256 checksum.
-- name: Install LXD and helm via native zypper packages (openSUSE has no snapd)
+# openSUSE Leap 16.0 (stable) still publishes "lxd" natively, with the
+# "ubuntu:" remote already configured out of the box just like the snap —
+# confirmed live, no compat naming needed (see lxd_uses_incus in
+# defaults/main.yml).
+- name: Install LXD and helm via native zypper packages (openSUSE Leap only — no snapd)
   ansible.builtin.package:
     name:
       - lxd
       - helm
     state: present
-  when: ansible_facts.os_family == 'Suse'
+  when: ansible_facts.os_family == 'Suse' and not lxd_uses_incus
 
-# Unlike the snap-packaged LXD used elsewhere (activated automatically via
-# its socket unit), openSUSE's native lxd.service ships disabled — confirmed
-# live: "lxc list" fails with "LXD unix socket ... not found" until this
-# runs. Needed before lxd_init.yml's "lxd init --preseed" will work.
-- name: Ensure the lxd systemd service is enabled and started (openSUSE only)
+- name: Ensure the lxd systemd service is enabled and started (openSUSE Leap only)
   ansible.builtin.systemd:
     name: lxd
     enabled: true
     state: started
-  when: ansible_facts.os_family == 'Suse'
+  when: ansible_facts.os_family == 'Suse' and not lxd_uses_incus
+
+# openSUSE Tumbleweed retired the "lxd" package from its official repos
+# (confirmed live, 2026-08-15: "zypper se -s lxd" only returns unrelated
+# packages) — only "incus" (the community LXD fork, same lineage, REST
+# API/CLI compatible) is published there. "iptables" is a real dependency
+# not pulled in automatically by the "incus" package: confirmed live that
+# without it, "incus admin init --preseed" fails to set up the managed
+# network's firewall ("iptables: executable file not found in $PATH").
+- name: Install Incus via zypper (openSUSE Tumbleweed only — no longer publishes "lxd")
+  ansible.builtin.package:
+    name:
+      - incus
+      - iptables
+    state: present
+  when: lxd_uses_incus
+
+# The rest of this role (and every role/lab that consumes it) invokes
+# "lxc"/"lxd" directly. incus deliberately keeps its CLI compatible with
+# classic lxc syntax (image, network, exec, launch...) — confirmed live
+# that "lxc image copy", "lxc network show" and "lxc launch --vm" all work
+# unchanged through a plain symlink. The one real exception is daemon
+# initialization (see lxd_init_cmd in defaults/main.yml: "incus admin init"
+# is a subcommand of the client binary, unlike "lxd init", a subcommand of
+# the daemon itself).
+- name: Create lxc/lxd -> incus/incusd compat symlinks (openSUSE Tumbleweed only)
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    state: link
+    force: true
+  loop:
+    - { src: /usr/bin/incus, dest: /usr/local/bin/lxc }
+    - { src: /usr/sbin/incusd, dest: /usr/local/bin/lxd }
+  when: lxd_uses_incus
+
+- name: Ensure the incus systemd units are enabled and started (openSUSE Tumbleweed only)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - incus.socket
+    - incus
+  when: lxd_uses_incus
+
+# community.general.lxd_container/lxd_storage_volume_info (used throughout
+# lxd_machine_provision/k8s_ha_cluster/etc., ~50 call sites) talk to LXD's
+# REST API directly over "unix:/var/lib/lxd/unix.socket" by default, with
+# no environment-variable override — only a fixed "url:" parameter that
+# none of those tasks pass today. Rather than touching every call site,
+# link LXD's default socket path to incus's real one
+# ("/run/incus/unix.socket") — confirmed live that, since incus keeps its
+# REST API compatible with LXD's, those modules work unmodified through
+# this symlink. openSUSE Leap doesn't need this: its native "lxd" already
+# uses this exact socket path directly, no symlink involved.
+- name: Ensure /var/lib/lxd exists (openSUSE Tumbleweed only)
+  ansible.builtin.file:
+    path: /var/lib/lxd
+    state: directory
+    mode: "0755"
+  when: lxd_uses_incus
+
+- name: Link the default LXD socket path to incus's real socket (openSUSE Tumbleweed only)
+  ansible.builtin.file:
+    src: /run/incus/unix.socket
+    dest: /var/lib/lxd/unix.socket
+    state: link
+    force: true
+  when: lxd_uses_incus
 
 - name: Query the latest stable kubectl version (openSUSE only — no native package)
   ansible.builtin.uri:

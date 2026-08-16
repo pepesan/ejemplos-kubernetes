@@ -108,6 +108,26 @@ Este playbook realiza las siguientes acciones críticas:
 5.  **Inicializa LXD de forma no interactiva:** Levanta el pool de almacenamiento y la red puente `lxdbr0` con la subred `10.207.154.1/24`.
 6.  **Configura permisos:** Añade tu usuario al grupo `lxd`.
 
+> [!NOTE]
+> **Autoconfiguración de sudo no interactivo**: `00_instalar_ansible.sh` y `01_bootstrap_host.sh`
+> comparten la lógica de [`lib_sudo.sh`](lib_sudo.sh), que comprueba `sudo -n` al inicio y, si
+> falla, autoconfigura `/etc/sudoers.d/k8s-labs` (`usuario ALL=(ALL) NOPASSWD: ALL`). Detecta
+> primero el escenario (sudo-rs vs. sudo tradicional, TTY disponible o no) antes de actuar:
+> - **Con terminal real**: pide la contraseña de forma interactiva (`sudo -v`).
+> - **Sin terminal** (agente/CI/IDE remoto): usa `K8S_LABS_SUDO_PASS='tu_contraseña'` con
+>   `sudo -S`. Necesario en Ubuntu 24.10+ (sudo-rs) y en cualquier sudo tradicional sin
+>   `requiretty` activo.
+> - **Sudo tradicional con `requiretty` activo y sin terminal**: no hay forma fiable de saltárselo
+>   sin acceso a una terminal real (probado y descartado el uso de pseudo-terminales vía `script`:
+>   poco fiable entre versiones de `util-linux` y ausente en imágenes mínimas de Fedora). El script
+>   informa el error con instrucciones claras.
+> - **`/etc/sudoers` ausente por completo**: confirmado en vivo incluso en la imagen VM oficial de
+>   openSUSE Tumbleweed (el paquete `sudo` no activa `/usr/etc/sudoers` en el primer arranque).
+>   Requiere una intervención manual de root (el script indica el comando exacto).
+>
+> Se necesita **una sola contraseña de sudo** en la primera ejecución; a partir de entonces
+> `sudo -n` funciona sin interacción.
+
 ### Ejecución del Playbook:
 
 Ejecuta el playbook indicando la opción `--ask-become-pass` para que Ansible pueda solicitar privilegios de administrador (`sudo`) de forma segura en tu terminal para instalar las dependencias:
@@ -138,6 +158,20 @@ chmod +x 01_bootstrap_host.sh
 
 > [!IMPORTANT]
 > Una vez completado este playbook, debes cerrar y abrir de nuevo tu sesión de terminal (o ejecutar `newgrp lxd`) en tu host para que tu usuario tome el grupo `lxd` y puedas lanzar comandos de `lxc` sin privilegios de root (`sudo`).
+
+## 🎓 Lecciones Aprendidas (Bootstrap del Host Multidistribución)
+
+Estas son las clases de error reales, confirmadas en vivo (nunca solo por documentación), encontradas al validar `00_instalar_ansible.sh` → `00_bootstrap_host_lxd.yml` → `check_requisitos.yml` contra las 10 distros de la matriz soportada (Ubuntu 24.04/26.04, Debian 12/13, Fedora 43/44, Rocky Linux 9/10, openSUSE Leap 16.0/Tumbleweed). Antes de tocar el bootstrap del host, revisar esta lista.
+
+- **Un error real puede no ser una condición de carrera aunque lo parezca**: `lxd init --preseed` fallaba de forma intermitente con "lxd: command not found" justo tras instalar el snap, y el diagnóstico inicial fue "condición de carrera de snapd reiniciándose". La causa real era otra, determinista: `lookup('env', 'PATH')` congela el PATH del PROPIO PROCESO `ansible-playbook` en el momento en que arrancó — en el flujo real (`00_instalar_ansible.sh` → `01_bootstrap_host.sh` → este playbook, todo en la misma sesión de shell), esa sesión se abrió ANTES de que la tarea 1b instalara `snapd` y su script `/etc/profile.d` que añade su directorio de binarios al PATH. Solo "parecía" una carrera porque las pruebas manuales de repetición (una sesión de shell nueva y posterior) sí tenían el PATH correcto por casualidad. **Fix**: rutas de snap explícitas y hardcodeadas (`/snap/bin`, `/var/lib/snapd/snap/bin`) en el `environment: PATH` del play, en vez de depender solo de `lookup('env','PATH')`.
+- **`sudo` resetea el PATH a su propio `secure_path`, que varía mucho entre distros y puede no incluir `/usr/local/bin`**: confirmado en vivo en Rocky Linux 9, cuyo `secure_path` por defecto es `/sbin:/bin:/usr/sbin:/usr/bin` — sin `/usr/local/bin` ni `/usr/local/sbin`. El propio instalador oficial de Helm (`get-helm-4`, ejecutado vía `sudo`) fallaba su propia comprobación final `command -v helm` justo después de instalar el binario ahí, con el binario ya presente y ejecutable. **Fix**: `sudo env "PATH=$PATH" "$@"` en vez de `sudo "$@"` a secas (función `run_priv`), evitando depender del `secure_path` de cada distro.
+- **Un módulo/CLI puede fallar de forma genuinamente intermitente por reinicios internos del propio gestor de paquetes**: confirmado en vivo (Debian 13) que, tras instalar `snapd` por primera vez, éste se autoactualiza a su propia snap interna y se reinicia (versión saltando de `2.68.3` a `2.76.2` en el journal) — si `snap info lxd` cae justo en esa ventana, `community.general.snap` lo malinterpreta como salida vacía y falla con una excepción interna ("list index out of range") que enmascara el error real (el módulo solo reconoce el string exacto `"warning: no snap found"`, cualquier otro fallo de `snap info` lo confunde igual). Verificado con sondeo directo: ~40% de fallos en llamadas cada 0.5s durante &gt;100s tras la instalación. **Fix**: `retries`/`until` generosos (hasta 3 min de margen total) en las tareas que dependen de un snap recién instalado.
+- **No asumir que un paquete disponible en una distro lo está en todas las de la misma "familia"**: openSUSE Tumbleweed (rolling) retiró el paquete `lxd` de sus repos oficiales en favor de `incus` (el fork comunitario), pero openSUSE **Leap** 16.0 (estable) seguía publicando `lxd` nativo con normalidad — no puede tratarse "toda la familia Suse" por igual; hay que distinguir por `ansible_facts.distribution` exacto, no solo por `os_family`. Mismo patrón con `kernel-modules-extra`: existe con el mismo nombre en Fedora y en la familia RedHat, pero solo hace falta instalarlo explícitamente en Rocky Linux 10 (Fedora ya lo trae).
+- **Migrar de una herramienta a su fork/sucesor compatible (LXD → incus) puede hacerse sin tocar el resto del código, si el fork mantiene compatibilidad real de API/CLI**: confirmado en vivo que symlinks simples (`/usr/local/bin/lxc` → `incus`, `/usr/local/bin/lxd` → `incusd`, y el socket por defecto `/var/lib/lxd/unix.socket` → `/run/incus/unix.socket`) bastan para que tanto el CLI (`lxc image copy`, `lxc network show`, `lxc launch --vm`) como los módulos nativos de Ansible (`community.general.lxd_container`, `lxd_storage_volume_info`, usados en los ~50 sitios de los 14 laboratorios) sigan funcionando sin ningún cambio adicional. Única excepción real: la inicialización del daemon (`incus admin init` es subcomando del binario cliente, distinto de `lxd init`, subcomando del propio daemon).
+- **Al instalar un paquete de módulos de kernel versionado (p.ej. `kernel-modules-extra` en RHEL/Rocky), pedir la versión exacta del kernel en ejecución, no el nombre genérico del paquete**: confirmado en vivo (Rocky Linux 10) que `dnf install kernel-modules-extra` sin más instala la versión MÁS RECIENTE del repo, que puede no coincidir con el kernel realmente arrancado en la imagen base — los módulos de una versión no cargan en un kernel distinto (`modprobe` sigue fallando con "not found" aunque el paquete ya esté instalado). **Fix**: `kernel-modules-extra-{{ ansible_facts.kernel }}` (NEVRA exacta) en vez del nombre desnudo del paquete.
+- **No asumir que una utilidad "básica" está presente en una imagen mínima**: `which` no viene instalado por defecto en la imagen mínima de Rocky Linux 10 (`ansible.builtin.command: which lxc` fallaba con `rc=2` y stdout/stderr vacíos, un fallo silencioso y confuso de "el propio `which` no existe", no "lxc no existe"). **Fix**: `command -v` (builtin de `/bin/sh`, vía `ansible.builtin.shell`) en vez de `which` (paquete externo), portable en cualquier sistema POSIX sin dependencias adicionales.
+- **Un módulo de Ansible puede cambiar su propia superficie de parámetros entre versiones, y `pip`/`pipx` puede resolver una versión mucho más antigua sin avisar** si el Python del sistema es viejo: confirmado en vivo que Rocky Linux 9 (Python 3.9 de sistema) resuelve `ansible-core 2.15.13` + `community.general 7.5.2` vía `pipx install ansible` — una versión bastante más vieja que la que resuelven distros con Python 3.11+ — y esa versión de `community.general.ansible_galaxy_install` ni siquiera reconoce el parámetro `state` ("Unsupported parameters"). **Fix**: omitir el parámetro `state` por completo en vez de fijar `state: present` — el comportamiento por defecto (instalar si falta, sin tocar red/caché si ya está) es el mismo en ambas versiones, y así el playbook no depende de una versión mínima concreta del módulo.
+- **Reproducir en vivo un fallo "intermitente" varias veces antes de dar por buena la primera hipótesis de causa raíz**: el fallo de PATH del primer punto de esta lista se diagnosticó inicialmente (de forma incorrecta) como una carrera de tiempo, y ese diagnóstico erróneo llevó a aplicar primero un parche de `retries`/reintentos que no atacaba la causa real — solo se corrigió de verdad al notar que el fallo era reproducible al 100% en el flujo real de una sola sesión, y nunca al probarlo a mano en una sesión nueva.
 
 ---
 

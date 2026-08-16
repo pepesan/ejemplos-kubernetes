@@ -1,2 +1,23 @@
 ---
 - import_playbook: ../02_k8s_base_ha_3_managers_3_workers/03_configurar_os.yml
+
+- name: Configurar módulos de kernel adicionales para Ceph (RBD y CephFS)
+  hosts: k8s_nodes
+  gather_facts: false
+  tasks:
+    - name: Configurar módulos de kernel de Ceph en el arranque
+      ansible.builtin.copy:
+        content: |
+          rbd
+          ceph
+        dest: /etc/modules-load.d/ceph.conf
+        mode: "0644"
+
+    - name: Cargar módulos de kernel de Ceph inmediatamente
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rbd
+        - ceph
+      failed_when: false

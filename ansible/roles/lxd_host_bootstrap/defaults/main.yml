@@ -44,6 +44,19 @@ lxd_snap_packages:
   - name: helm
     classic: true
 
+# openSUSE Tumbleweed (rolling) dropped the "lxd" package from its official
+# repos in favor of "incus" (community fork, same lineage, REST API/CLI
+# compatible) — confirmed live, 2026-08-15: "zypper se -s lxd" only returns
+# unrelated packages (lxd-ovmf-setup-*, the lxde desktop). openSUSE Leap
+# 16.0 (stable), by contrast, still ships "lxd" natively as of the same
+# date — the two openSUSE variants can't be treated identically. These 3
+# variables isolate the naming/command differences everywhere else in this
+# role, which otherwise always uses plain "lxc"/"lxd" (see the compat
+# symlinks in snap_packages.yml, only created on Tumbleweed).
+lxd_uses_incus: "{{ ansible_facts.distribution == 'openSUSE Tumbleweed' }}"
+lxd_group_name: "{{ 'incus-admin' if lxd_uses_incus else 'lxd' }}"
+lxd_init_cmd: "{{ 'incus admin init' if lxd_uses_incus else 'lxd init' }}"
+
 # LXD network bridge created by "lxd init --preseed".
 lxd_network_name: lxdbr0
 lxd_network_subnet: "10.207.154.1/24"
@@ -52,8 +65,11 @@ lxd_network_subnet: "10.207.154.1/24"
 lxd_storage_pool_name: default
 lxd_storage_pool_driver: dir
 
-# Base image every instance in the lab is cloned from. Copied locally from
-# the "ubuntu:" remote and aliased so lxd_machine_provision can reference it
-# by name instead of a remote image fingerprint.
-lxd_base_image_remote: "ubuntu:26.04"
+# Base image every instance in the lab is cloned from. Copied locally and
+# aliased so lxd_machine_provision can reference it by name instead of a
+# remote image fingerprint. incus only ships the community "images:" remote
+# by default (no Canonical-run "ubuntu:" simplestreams server) — confirmed
+# live that "images:ubuntu/26.04" resolves to the equivalent official
+# Ubuntu VM image there.
+lxd_base_image_remote: "{{ 'images:ubuntu/26.04' if lxd_uses_incus else 'ubuntu:26.04' }}"
 lxd_base_image_alias: k8s-template

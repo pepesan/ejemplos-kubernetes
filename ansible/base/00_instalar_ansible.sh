@@ -6,6 +6,11 @@ set -euo pipefail
 # previos (check_requisitos.yml) — encadenando 01_bootstrap_host.sh automáticamente
 # antes si LXD todavía no está instalado.
 #
+# Autoconfigura sudo no interactivo al inicio: si `sudo -n` falla (p. ej. requiretty
+# en Ubuntu 26.04), genera /etc/sudoers.d/k8s-labs automáticamente. Se necesita una
+# sola contraseña de sudo en la primera ejecución; a partir de entonces funciona sin
+# interacción. Multidistro: funciona en todas las distros soportadas.
+#
 # Multidistribución: probado en vivo (contenedores LXD, salvo Rocky Linux 10 que
 # se prueba como VM LXD por no haber imagen de contenedor publicada todavía) sobre
 # las 2 últimas versiones estables de Ubuntu, Debian, Rocky Linux (9 y 10; la 10
@@ -20,13 +25,31 @@ set -euo pipefail
 SKIP_CHECK_REQUISITOS="${SKIP_CHECK_REQUISITOS:-false}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+
+# check_and_fix_sudo() vive en lib_sudo.sh (compartida con 01_bootstrap_host.sh).
+source "$SCRIPT_DIR/lib_sudo.sh"
+
 run_priv() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
   else
-    sudo "$@"
+    # env "PATH=$PATH": el secure_path por defecto de sudo puede ser mucho
+    # más restrictivo que el PATH real del usuario -- confirmado en vivo en
+    # Rocky Linux 9, cuyo /etc/sudoers trae "secure_path =
+    # /sbin:/bin:/usr/sbin:/usr/bin" SIN /usr/local/bin ni /usr/local/sbin.
+    # Sin este PATH explícito, el propio instalador oficial de Helm
+    # (get-helm-4, ejecutado vía run_priv) falla su propia comprobación
+    # final "command -v helm" justo después de instalar el binario en
+    # /usr/local/bin/helm -- "helm not found. Is /usr/local/bin on your
+    # $PATH?" -- pese a que el fichero existe y es ejecutable. "env" evita
+    # tener que tocar secure_path en /etc/sudoers (permitido igualmente por
+    # la regla "NOPASSWD: ALL" generada por check_and_fix_sudo).
+    sudo env "PATH=$PATH" "$@"
   fi
 }
+
+# Verificar y corregir sudo no interactivo antes de cualquier operación
+check_and_fix_sudo
 
 # Los mirrors de los gestores de paquetes fallan de forma intermitente
 # (DNS/red), sobre todo justo tras arrancar una máquina/contenedor nuevo.
@@ -210,14 +233,25 @@ if [ "$SKIP_CHECK_REQUISITOS" = "true" ]; then
   exit 0
 fi
 
-# LXD todavía no está instalado en un host nuevo: encadena 01_bootstrap_host.sh
+# LXD todavía no está listo para el usuario actual: encadena 01_bootstrap_host.sh
 # automáticamente (pide la contraseña de sudo de forma interactiva vía
 # --ask-become-pass) en vez de dejar que check_requisitos.yml falle pidiendo
 # ejecutarlo a mano.
-if ! command -v lxc &>/dev/null; then
+#
+# "command -v lxc" NO es suficiente: Ubuntu 24.04+ trae por defecto el paquete
+# "lxd-installer", que instala un script "stub" en /usr/sbin/lxc que hace creer
+# que LXD ya está disponible aunque el snap real no se haya instalado todavía.
+# Ese stub, además, solo se autoinstala si el usuario actual ya pertenece al
+# grupo "lxd" (que un usuario recién creado, a diferencia del "ubuntu" de
+# cloud-init, no tiene) — confirmado en vivo: sin este chequeo, el script se
+# saltaba 01_bootstrap_host.sh creyendo que LXD ya estaba listo, dejando al
+# usuario sin grupo "lxd", sin red "lxdbr0" y sin la imagen "k8s-template".
+# "lxc list" solo tiene éxito si el binario real está instalado, el demonio
+# está inicializado y el usuario actual tiene acceso a su socket.
+if ! lxc list &>/dev/null; then
   echo ""
   echo "════════════════════════════════════════════════════════════════"
-  echo "  LXD no está instalado todavía; ejecutando 01_bootstrap_host.sh..."
+  echo "  LXD no está listo todavía para este usuario; ejecutando 01_bootstrap_host.sh..."
   echo "════════════════════════════════════════════════════════════════"
   echo ""
   "$SCRIPT_DIR/01_bootstrap_host.sh"
@@ -230,7 +264,7 @@ echo "════════════════════════�
 echo ""
 
 ANSIBLE_PLAYBOOK="$HOME/.local/bin/ansible-playbook"
-if ! command -v ansible-playbook &>/dev/null && [ -x "$ANSIBLE_PLAYBOOK" ]; then
+if ! command -v ansible-playbook &>/dev/null || [ -x "$ANSIBLE_PLAYBOOK" ]; then
   "$ANSIBLE_PLAYBOOK" "$SCRIPT_DIR/check_requisitos.yml"
 else
   ansible-playbook "$SCRIPT_DIR/check_requisitos.yml"
