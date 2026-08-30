@@ -55,7 +55,7 @@
         lxc exec {{ item }} -- true
       register: lxd_agent_status
       until: lxd_agent_status.rc == 0
-      retries: 30
+      retries: 60
       delay: 2
       loop: "{{ groups['all_nodes'] }}"
       changed_when: false
@@ -96,7 +96,7 @@
         host: "{{ hostvars[item].ansible_host }}"
         port: 22
         delay: 2
-        timeout: 90
+        timeout: 120
         search_regex: "^SSH-"
       loop: "{{ groups['all_nodes'] }}"
 
