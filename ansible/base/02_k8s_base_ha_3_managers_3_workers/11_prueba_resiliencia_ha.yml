@@ -134,4 +134,5 @@
           - "  "
           - "  Estado final de los 6 nodos:"
           - "{{ nodes_final.stdout_lines }}"
+          - "Depsliegue nginx en cluster: http://{{ hostvars['k8s-worker3'].ansible_host }}:32080"
           - "════════════════════════════════════════════════════════════════"
