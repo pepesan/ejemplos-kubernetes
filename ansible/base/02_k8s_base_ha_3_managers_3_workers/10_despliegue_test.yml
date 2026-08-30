@@ -106,4 +106,4 @@
 
     - name: Mostrar resultado de verificación de clúster multinodo
       ansible.builtin.debug:
-        msg: "Verificación OK! El clúster responde correctamente en los 3 workers (puerto 32080)."
+        msg: "Verificación OK! El clúster responde correctamente en los 3 workers (puerto 32080). http://{{ hostvars['k8s-worker3'].ansible_host }}:32080"

@@ -1,4 +1,4 @@
-# Laboratorio K8s Multi-Node (1 Manager + 2 Workers) sobre LXD
+# Laboratorio K8s Multi-Node 3 Manager + 3 Workers) sobre LXD
 
 Este laboratorio contiene una serie de playbooks de Ansible para desplegar de forma automatizada un clúster multi-nodo completo de Kubernetes (1 nodo Control-Plane/Manager y 2 nodos Workers) sobre máquinas virtuales LXD en la máquina local.
 
