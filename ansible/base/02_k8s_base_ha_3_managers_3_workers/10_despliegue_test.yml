@@ -4,7 +4,7 @@
   connection: local
   gather_facts: false
   vars:
-    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
   tasks:
     - name: Esperar un momento a que los workers estén en estado Ready
       ansible.builtin.pause:

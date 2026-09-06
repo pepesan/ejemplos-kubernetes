@@ -53,7 +53,7 @@
     - name: Crear archivo de configuración de kubeadm
       ansible.builtin.copy:
         content: |
-          apiVersion: kubeadm.k8s.io/v1beta3
+          apiVersion: kubeadm.k8s.io/v1beta4
           kind: InitConfiguration
           localAPIEndpoint:
             advertiseAddress: "{{ ansible_host }}"
@@ -62,7 +62,7 @@
             criSocket: unix:///var/run/containerd/containerd.sock
             imagePullPolicy: IfNotPresent
           ---
-          apiVersion: kubeadm.k8s.io/v1beta3
+          apiVersion: kubeadm.k8s.io/v1beta4
           kind: ClusterConfiguration
           controlPlaneEndpoint: "{{ k8s_vip_address }}:{{ k8s_vip_port }}"
           networking:

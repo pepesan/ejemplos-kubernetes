@@ -11,14 +11,14 @@ lxd_network: lxdbr0
 lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
 
 # Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
-k8s_major_version: "v1.36"
+k8s_major_version: "v1.37"
 k8s_pod_network_cidr: "10.244.0.0/16" # CIDR de pods, gestionado por Cilium (modo cluster-pool)
 
 # VIP de alta disponibilidad del plano de control (kube-vip) — igual que en el 02
 k8s_vip_address: "10.207.154.49"
 k8s_vip_port: 6443
 k8s_vip_interface: enp5s0
-kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.3"
 
 # Cilium sustituye a Flannel como CNI (igual que en el escenario 08) y provee
 # su LoadBalancer L2 nativo (LB-IPAM + L2Announcement) para exponer la BBDD
@@ -53,7 +53,7 @@ pg_storage_size: "3Gi"
 pg_backup_storage_size: "1Gi"
 
 # Versión del chart de Headlamp
-headlamp_chart_version: "0.43.0"
+headlamp_chart_version: "0.45.0"
 
 # Versión del chart de Longhorn
-longhorn_chart_version: "1.12.0"
+longhorn_chart_version: "1.12.1"

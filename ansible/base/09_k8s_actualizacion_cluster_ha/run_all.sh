@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Despliega un clúster HA en Kubernetes v1.35 y lo actualiza a v1.36 sin downtime.
+# Despliega un clúster HA en Kubernetes v1.36 y lo actualiza a v1.37 sin downtime.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,15 +34,15 @@ run_playbook 01 ../check_requisitos.yml                "Validar LXD, la red y la
 run_playbook 02 02_crear_nodos.yml                     "Crear las máquinas virtuales LXD para el clúster (3 managers + 3 workers)"
 run_playbook 03 03_configurar_os.yml                   "Configurar módulos de kernel y sysctl en los nodos"
 run_playbook 04 04_instalar_containerd.yml             "Instalar y configurar containerd (CRI) con systemd driver"
-run_playbook 05 05_instalar_k8s_tools.yml              "Instalar kubeadm, kubelet y kubectl v1.35 (hold de versiones)"
-run_playbook 06 06_inicializar_primer_manager.yml      "Inicializar el primer manager (kube-vip + kubeadm init HA) en v1.35"
+run_playbook 05 05_instalar_k8s_tools.yml              "Instalar kubeadm, kubelet y kubectl v1.36 (hold de versiones)"
+run_playbook 06 06_inicializar_primer_manager.yml      "Inicializar el primer manager (kube-vip + kubeadm init HA) en v1.36"
 run_playbook 07 07_unir_managers.yml                   "Unir los managers adicionales al plano de control HA"
 run_playbook 08 08_unir_workers.yml                    "Unir los nodos workers al clúster (vía el VIP)"
 run_playbook 09 09_desplegar_headlamp.yml              "Desplegar Headlamp Dashboard (pronto, para seguir la actualización desde la consola web)"
-run_playbook 10 10_actualizar_primer_manager.yml       "Actualizar el primer manager a v1.36 (kubeadm upgrade apply)"
-run_playbook 11 11_actualizar_managers_adicionales.yml "Actualizar los managers adicionales a v1.36 (kubeadm upgrade node), uno a uno"
-run_playbook 12 12_actualizar_workers.yml              "Actualizar los workers a v1.36 (kubeadm upgrade node), uno a uno"
-run_playbook 13 13_verificar_actualizacion.yml         "Verificar que el clúster ha quedado sano en v1.36"
+run_playbook 10 10_actualizar_primer_manager.yml       "Actualizar el primer manager a v1.37 (kubeadm upgrade apply)"
+run_playbook 11 11_actualizar_managers_adicionales.yml "Actualizar los managers adicionales a v1.37 (kubeadm upgrade node), uno a uno"
+run_playbook 12 12_actualizar_workers.yml              "Actualizar los workers a v1.37 (kubeadm upgrade node), uno a uno"
+run_playbook 13 13_verificar_actualizacion.yml         "Verificar que el clúster ha quedado sano en v1.37"
 
 host_ip() { awk -v h="$1" '$1==h { for (i=1;i<=NF;i++) if ($i ~ /^ansible_host=/) print substr($i, index($i, "=")+1) }' inventory.ini; }
 VIP=$(awk -F': ' '/^k8s_vip_address:/ { gsub(/"/,"",$2); print $2 }' group_vars/all.yml)

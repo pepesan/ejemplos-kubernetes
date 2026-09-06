@@ -1,4 +1,16 @@
 ---
+# Equivalente al 13_eliminar_nodo.yml del ejemplo 02, renumerado a 14 porque aquí ocupa
+# la posición siguiente al playbook 13 de integración en Longhorn. Diferencias:
+# - Antes de drenar el nodo, comprueba si tiene la label node.longhorn.io/storage-node.
+#   Si es un nodo de storage, primero desactiva el scheduling de réplicas en Longhorn
+#   (`allowScheduling: false` sobre el recurso nodes.longhorn.io) y espera unos segundos,
+#   para dar tiempo a que Longhorn deje de intentar reconstruir réplicas ahí antes de
+#   apagarlo — evitar esto en un nodo de storage dejaría réplicas degradadas o corruptas.
+# - Tras el `drain` y el `kubeadm reset`, si era un nodo de storage borra también su
+#   recurso `nodes.longhorn.io` de forma explícita (si no, Longhorn lo seguiría viendo
+#   como un nodo "perdido" en su propio inventario aunque ya no exista en Kubernetes).
+# - El resto (drenar, `kubeadm reset`, borrar el Node de Kubernetes y destruir la VM de
+#   LXD) es igual que en el ejemplo 02.
 - name: Eliminar un nodo (workload o storage) del clúster Longhorn
   hosts: localhost
   connection: local

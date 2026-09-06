@@ -4,7 +4,7 @@
   connection: local
   gather_facts: false
   vars:
-    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
   tasks:
     - name: Estado inicial - comprobar que los 6 nodos están Ready
       ansible.builtin.shell: >

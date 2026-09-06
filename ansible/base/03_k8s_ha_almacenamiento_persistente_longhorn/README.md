@@ -37,6 +37,99 @@ Recursos que este laboratorio reserva en LXD (8 VMs) — el host debe tener al m
 
 ---
 
+## 🆚 Diferencias respecto al ejemplo 02 (base HA sin storage)
+
+Este escenario 03 parte del clúster HA del ejemplo `02_k8s_base_ha_3_managers_3_workers`
+y le añade Longhorn. Los playbooks `02` (crear nodos), `04` (containerd), `05` (kubeadm/
+kubelet/kubectl), `06`-`08` (inicializar/unir managers y workers) y `09` (Headlamp) son
+simples `import_playbook` de sus equivalentes en el 02 — no tienen tareas propias, para
+no duplicar esa lógica entre labs. Los que sí cambian, y por qué, son:
+
+*   **`03_configurar_os.yml`**: en el 02 este playbook aplica directamente el ajuste
+    base del sistema operativo (swap, módulos de kernel, sysctl, `/dev/kmsg`...). Aquí
+    ese ajuste se **reutiliza sin cambios** vía `import_playbook` del propio 02, y se le
+    añade un segundo play exclusivo de Longhorn que instala `open-iscsi`/
+    `iscsi-initiator-utils` (Longhorn expone cada réplica como un target iSCSI local;
+    sin el iniciador el kubelet no puede montarlas) y `nfs-common`/`nfs-utils`
+    (necesario para el modo ReadWriteMany, que Longhorn implementa reexportando el
+    volumen por NFS), y se asegura de que el servicio `iscsid` quede arrancado y
+    habilitado en el arranque.
+*   **`10_desplegar_longhorn.yml`** (sin equivalente en el 02, que en su paso 10
+    despliega una app de prueba sin storage persistente): etiqueta los nodos según su
+    rol (`workload_workers` / `storage_workers` del inventario), aplica el taint
+    `storage-node=true:NoSchedule` a los nodos de storage y despliega Longhorn vía Helm
+    con 3 réplicas por defecto y su UI expuesta como NodePort en el puerto 32085.
+*   **`11_verificar_persistencia_rwx.yml`** (sin equivalente en el 02, cuyo paso 11
+    valida la alta disponibilidad del *plano de control*, no el almacenamiento): crea
+    un PVC RWX, despliega 2 pods que escriben a la vez sobre el mismo volumen
+    compartido, y comprueba leyendo el fichero resultante que contiene líneas de
+    ambos hostnames — demostrando que el volumen es realmente compartido entre nodos.
+*   **`12_add_node.yml`** (evolución de `12_adicionar_nodo.yml` del 02): se renombra
+    porque aquí un nodo nuevo ya no es "un worker más" — puede terminar siendo de
+    storage o de workload. Este playbook solo se ocupa de la infraestructura
+    (VM LXD + `kubeadm join`); deliberadamente **no asigna ningún rol de Longhorn**,
+    para poder reutilizarlo tal cual en escenarios que no usan Longhorn. Termina
+    indicando que el siguiente paso obligatorio es `13_integrar_nodo_longhorn.yml`.
+*   **`13_integrar_nodo_longhorn.yml`** (sin equivalente en el 02, que no tiene
+    concepto de rol de nodo): segundo paso al añadir un nodo — decide su rol con la
+    regla "almacenamiento por defecto, cómputo como excepción" (ver más abajo) y le
+    aplica las labels y el taint correspondientes.
+*   **`14_eliminar_nodo.yml`** (evolución de `13_eliminar_nodo.yml` del 02, renumerado
+    a 14 por ir tras el nuevo paso 13): antes de drenar el nodo comprueba si tiene la
+    label `node.longhorn.io/storage-node`; si es un nodo de storage, primero desactiva
+    el *scheduling* de réplicas en Longhorn (`allowScheduling: false`) y espera unos
+    segundos para que Longhorn deje de intentar reconstruir réplicas ahí, y al final
+    borra también su recurso `nodes.longhorn.io` explícitamente (si no, Longhorn lo
+    seguiría viendo como un nodo "perdido" en su propio inventario).
+*   **`group_vars/all.yml`**: añade `longhorn_chart_version`, `longhorn_test_pvc_size`
+    y `test_alpine_image`, variables que no existen en el 02.
+*   **Inventario (`inventory.ini`)**: añade los grupos `workload_workers` y
+    `storage_workers` (y, para el escalado, `new_workload_workers`) que no existen en
+    el 02, donde todos los workers son equivalentes entre sí.
+
+### ⚠️ Variables compartidas con el ejemplo 02 — ¿dónde tengo que cambiar la versión?
+
+Los playbooks `02`, `04`, `05`, `06`, `07`, `08`, `09` (y el primer play del `03`) de
+este lab **no tienen tareas propias**: son un `import_playbook` del fichero equivalente
+en `../02_k8s_base_ha_3_managers_3_workers/`, para no duplicar esa lógica entre labs.
+Por ejemplo, `05_instalar_k8s_tools.yml` de este 03 es literalmente:
+
+```yaml
+---
+- import_playbook: ../02_k8s_base_ha_3_managers_3_workers/05_instalar_k8s_tools.yml
+```
+
+**El problema**: Ansible carga `group_vars/`/`host_vars/` de forma independiente para
+cada fichero de playbook que participa en la ejecución — no solo del que se lanza desde
+`ansible-playbook`/`run_all.sh`. Como la tarea real que instala `kubelet`/`kubeadm`/
+`kubectl` vive físicamente en el directorio del ejemplo 02, para esa tarea concreta
+Ansible también lee `../02_k8s_base_ha_3_managers_3_workers/group_vars/all.yml` — y ese
+valor **gana** sobre el de `group_vars/all.yml` de este 03.
+
+Consecuencia real que motivó esta nota: se cambió aquí `k8s_major_version` de `v1.36` a
+`v1.37`, se ejecutó `run_all.sh`, y el clúster se instaló igualmente con `v1.36` —
+porque el `group_vars/all.yml` del ejemplo 02 todavía decía `v1.36`.
+
+**Variables afectadas por este mecanismo** (usadas dentro de playbooks importados del
+02) y **dónde hay que tocarlas**:
+
+| Variable | Se aplica en | Hay que cambiarla en |
+| :--- | :--- | :--- |
+| `k8s_major_version` | `05_instalar_k8s_tools.yml` (import del 02) | **group_vars/all.yml del 02 Y del 03** (los dos, a la vez) |
+| `kube_vip_image` | `06_inicializar_primer_manager.yml` (import del 02) | **group_vars/all.yml del 02 Y del 03** (los dos, a la vez) |
+| `k8s_vip_address` / `k8s_vip_port` / `k8s_vip_interface` | `02`, `06`, `07`, `08` (imports del 02) | **group_vars/all.yml del 02 Y del 03** (los dos, a la vez) |
+| `lxd_image` / `lxd_network` / `lxd_kernel_modules` | `02`, `03` (imports del 02) | **group_vars/all.yml del 02 Y del 03** (los dos, a la vez) |
+| `headlamp_chart_version` | `09_desplegar_headlamp.yml` (import del 02) | **group_vars/all.yml del 02 Y del 03** (los dos, a la vez) |
+| `longhorn_chart_version`, `longhorn_test_pvc_size`, `test_alpine_image` | `10`, `11` (propios de este 03, no existen en el 02) | Solo `group_vars/all.yml` del 03 |
+
+**Regla práctica**: si la variable que quieres cambiar también existe en
+`../02_k8s_base_ha_3_managers_3_workers/group_vars/all.yml`, cámbiala en **ambos**
+ficheros a la vez, o el cambio en el 03 no tendrá ningún efecto en los playbooks
+importados. `group_vars/all.yml` de este 03 lleva un aviso `⚠️` en cada variable
+afectada, con esta misma indicación.
+
+---
+
 ## 📐 Arquitectura del Clúster (Separación de Roles)
 
 Para evitar que el tráfico de E/S del almacenamiento y la replicación del disco afecte al rendimiento de tus aplicaciones (y viceversa), el clúster separa los nodos de carga de trabajo de los nodos de almacenamiento utilizando **Taints & Labels**.

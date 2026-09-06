@@ -1,4 +1,19 @@
 ---
+# ⚠️ ATENCIÓN — variables DUPLICADAS con ../02_k8s_base_ha_3_managers_3_workers/group_vars/all.yml
+#
+# Varios playbooks de este lab (02, 03 en su primer play, 04, 05, 06, 07, 08) son
+# `import_playbook` de sus equivalentes en el ejemplo 02 (se reutilizan tal cual para
+# no duplicar tareas). Ansible carga group_vars/host_vars por CADA fichero de playbook
+# que participa en la ejecución, así que para esas plays importadas también se lee
+# ../02_k8s_base_ha_3_managers_3_workers/group_vars/all.yml — y ese fichero GANA sobre
+# este para las variables que ambos definen (ver detalle técnico en el README, sección
+# "Variables compartidas con el ejemplo 02").
+#
+# Consecuencia práctica: si cambias aquí abajo `k8s_major_version`, `kube_vip_image` o
+# `headlamp_chart_version` SIN cambiar también el mismo valor en el group_vars del
+# ejemplo 02, el cambio NO tendrá efecto — seguirá instalándose la versión que diga
+# el 02. Cambia siempre ambos ficheros a la vez para estas tres variables.
+#
 # Conexión SSH: acceso como root sin contraseña (clave inyectada en la imagen base)
 ansible_user: root
 ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
@@ -11,23 +26,30 @@ lxd_network: lxdbr0
 lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
 
 # Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
-k8s_major_version: "v1.36"
+# ⚠️ Compartida con el 02 (se aplica en 05_instalar_k8s_tools.yml, importado de allí) —
+# debe coincidir con k8s_major_version del group_vars del ejemplo 02.
+k8s_major_version: "v1.37"
 k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
 
 # VIP de alta disponibilidad del plano de control (kube-vip) — igual que en el 02
 k8s_vip_address: "10.207.154.49"
 k8s_vip_port: 6443
 k8s_vip_interface: enp5s0
-kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+# ⚠️ Compartida con el 02 (se aplica en 06_inicializar_primer_manager.yml, importado de
+# allí) — debe coincidir con kube_vip_image del group_vars del ejemplo 02.
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.3"
 
 # Versión del chart de Headlamp
-headlamp_chart_version: "0.43.0"
+# ⚠️ Este SÍ se usa desde el propio 09_desplegar_headlamp.yml de este lab (no es un
+# import_playbook del 02), así que en principio bastaría con cambiarlo solo aquí — pero
+# se mantiene sincronizado con el 02 por claridad y coherencia entre ambos labs.
+headlamp_chart_version: "0.45.0"
 
 # Versión del chart de Longhorn
-longhorn_chart_version: "1.12.0"
+longhorn_chart_version: "1.12.1"
 
 # Tamaño del PVC de prueba usado para verificar la persistencia RWX
 longhorn_test_pvc_size: "1Gi"
 
 # Imágenes de contenedor para verificación de persistencia
-test_alpine_image: "alpine:3.21"
+test_alpine_image: "alpine:3.24"

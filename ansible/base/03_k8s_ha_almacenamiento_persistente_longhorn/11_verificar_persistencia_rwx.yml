@@ -1,4 +1,17 @@
 ---
+# Sin equivalente en el ejemplo 02: allí el 11 (11_prueba_resiliencia_ha.yml) valida la
+# alta disponibilidad del PLANO DE CONTROL (apagar/reiniciar managers), no el
+# almacenamiento. Este playbook, en cambio, valida el motor de datos desplegado en el
+# 10 (Longhorn) mediante un caso de uso concreto de ReadWriteMany (RWX):
+# - Crea un PVC RWX (`storageClassName: longhorn`) y espera a que Longhorn lo
+#   aprovisione y quede en estado Bound.
+# - Despliega 2 réplicas de un pod escritor (en los nodos de workload, sin taint) que
+#   montan ese MISMO volumen compartido y escriben líneas con fecha y su propio
+#   hostname en un fichero común — esto es justo lo que RWX permite y RWO no: dos pods
+#   distintos escribiendo a la vez sobre el mismo volumen.
+# - Lee el fichero compartido desde uno de los pods y muestra su contenido: si aparecen
+#   líneas de AMBOS hostnames, queda demostrado que el volumen es realmente compartido
+#   entre nodos y no solo montado localmente por cada uno.
 - name: Verificar Almacenamiento Persistente RWX con Longhorn
   hosts: localhost
   connection: local
@@ -110,4 +123,23 @@
           - "  El archivo de logs compartido contiene las siguientes líneas:"
           - "  "
           - "{{ log_file_content.stdout_lines }}"
+          - "  "
+          - "  ────────────────────────────────────────────────────────────"
+          - "  CONECTARSE AL CLÚSTER MANUALMENTE"
+          - "  ────────────────────────────────────────────────────────────"
+          - "  Para seguir explorando con kubectl desde tu propia máquina, exporta"
+          - "  el kubeconfig generado en este directorio:"
+          - "  "
+          - "    export KUBECONFIG={{ kubeconfig_path }}"
+          - "    kubectl get nodes -o wide"
+          - "    kubectl get pvc,pv -n test-persistence"
+          - "    kubectl get pods -n test-persistence -o wide"
+          - "  "
+          - "  Para entrar por shell interactiva a uno de los pods de prueba y ver"
+          - "  el fichero compartido tú mismo (relee el mismo volumen RWX):"
+          - "  "
+          - "    kubectl exec -n test-persistence -it {{ pod_name_check.stdout }} -- sh"
+          - "    # dentro del pod: cat /mnt/shared-data/pod-logs.txt"
+          - "  "
+          - "  Panel web de Longhorn: http://{{ k8s_vip_address }}:32085"
           - "════════════════════════════════════════════════════════════════"

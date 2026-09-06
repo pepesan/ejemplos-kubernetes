@@ -4,7 +4,7 @@
   connection: local
   gather_facts: false
   vars:
-    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    kubeconfig_path: "{{ inventory_dir }}/kubeconfig.yaml"
   tasks:
     - name: Agregar el repositorio de Headlamp a Helm
       kubernetes.core.helm_repository:
@@ -55,7 +55,7 @@
 
     - name: Comprobar si ya existe el archivo del token de Headlamp
       ansible.builtin.stat:
-        path: "{{ playbook_dir }}/headlamp_token.txt"
+        path: "{{ inventory_dir }}/headlamp_token.txt"
       register: token_file_status
 
     - name: Obtener token de acceso para Headlamp (válido por 1 año)
@@ -68,7 +68,7 @@
     - name: Guardar el token de Headlamp en un archivo local
       ansible.builtin.copy:
         content: "{{ token_out.stdout }}"
-        dest: "{{ playbook_dir }}/headlamp_token.txt"
+        dest: "{{ inventory_dir }}/headlamp_token.txt"
         mode: "0600"
       when: not token_file_status.stat.exists
 
@@ -81,7 +81,7 @@
           - "  URL de acceso (vía VIP): http://{{ k8s_vip_address }}:32082"
           - "  "
           - "  El token de acceso administrador ha sido guardado de forma segura en:"
-          - "  {{ playbook_dir }}/headlamp_token.txt"
+          - "  {{ inventory_dir }}/headlamp_token.txt"
           - "  "
           - "  Para consultar o regenerar el token manualmente:"
           - "  kubectl --kubeconfig={{ kubeconfig_path }} create token headlamp-admin -n headlamp --duration=8760h"

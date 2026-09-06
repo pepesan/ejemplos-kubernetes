@@ -1,2 +1,62 @@
 ---
-- import_playbook: ../02_k8s_base_ha_3_managers_3_workers/05_instalar_k8s_tools.yml
+# A diferencia del resto de playbooks 02-08 de este lab (que sí son `import_playbook`
+# tal cual del ejemplo 02), este fichero NO importa 02_k8s_base_ha_3_managers_3_workers/
+# 05_instalar_k8s_tools.yml a propósito, y duplica su contenido en su lugar.
+#
+# Motivo: Ansible carga group_vars/host_vars por cada fichero de playbook que participa
+# en la ejecución. Si este fichero fuera un import_playbook, la tarea real viviría en el
+# directorio del ejemplo 02, y su group_vars/all.yml (que fija la versión de Kubernetes
+# "estándar" del resto de laboratorios, hoy v1.37) GANARÍA sobre el k8s_major_version
+# de ESTE lab — instalando siempre la versión estándar del 02 en vez de la versión
+# antigua que este laboratorio necesita como punto de partida para poder demostrar
+# después una actualización real (ver k8s_major_version/k8s_upgrade_target_version en
+# group_vars/all.yml). Duplicar aquí la tarea, sin import, hace que solo se cargue el
+# group_vars de este directorio, desacoplado del 02.
+- name: Instalar herramientas de Kubernetes en todos los nodos
+  hosts: k8s_nodes
+  gather_facts: true
+  tasks:
+    - name: Instalar python3-debian (dependencia de deb822_repository)
+      ansible.builtin.apt:
+        name: python3-debian
+        state: present
+        lock_timeout: 300
+
+    - name: Descargar la clave GPG del repositorio de Kubernetes
+      ansible.builtin.get_url:
+        url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/deb/Release.key"
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+        mode: "0644"
+
+    - name: Añadir el repositorio oficial de Kubernetes
+      ansible.builtin.deb822_repository:
+        name: kubernetes
+        types: deb
+        uris: "https://pkgs.k8s.io/core:/stable:/{{ k8s_major_version }}/deb/"
+        suites: "/"
+        signed_by: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+
+    - name: Instalar kubelet, kubeadm y kubectl
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: true
+        lock_timeout: 300
+
+    - name: Evitar que se actualicen automáticamente kubelet, kubeadm y kubectl
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: Arrancar y habilitar el servicio kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: started
+        enabled: true

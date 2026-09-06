@@ -1,4 +1,17 @@
 ---
+# Sin equivalente en el ejemplo 02 (allí no existe el concepto de rol de nodo, así que
+# tras 12_adicionar_nodo.yml no hace falta ningún paso adicional). Este playbook es el
+# segundo de los dos pasos en que aquí se divide "añadir un nodo": una vez que
+# 12_add_node.yml ya lo unió al clúster de Kubernetes, este decide y aplica su ROL de
+# Longhorn:
+# - Regla "almacenamiento por defecto, cómputo como excepción": todo nodo del grupo
+#   [new_workers] se trata como storage salvo que se liste también, por su nombre, en
+#   [new_workload_workers] (lista de exclusión / opt-out).
+# - A los nodos storage les aplica la misma label + taint que el 10_desplegar_longhorn.yml
+#   aplicó a los nodos storage originales (node.longhorn.io/storage-node,
+#   node.longhorn.io/create-default-disk y el taint storage-node=true:NoSchedule), para
+#   que Longhorn cree ahí un disco por defecto y ningún pod de aplicación se programe.
+# - A los nodos workload (excepción) solo les pone la label workload-node, sin taint.
 - name: Integrar el nuevo nodo en Longhorn (etiquetas y taints de almacenamiento)
   hosts: localhost
   connection: local

@@ -1,4 +1,16 @@
 ---
+# Diferencias respecto al 03_configurar_os.yml del ejemplo 02 (base HA sin storage):
+# - Aquí NO se reescribe el ajuste base del sistema operativo (swap, módulos de kernel,
+#   sysctl, /dev/kmsg, etc.): se reutiliza tal cual importando el playbook del 02 con
+#   `import_playbook`, para no duplicar esa lógica entre laboratorios.
+# - Se añade un segundo play, exclusivo de este escenario, que instala los paquetes de
+#   sistema que Longhorn necesita en cada nodo para poder montar sus volúmenes:
+#     * open-iscsi / iscsi-initiator-utils: Longhorn expone cada réplica de volumen como
+#       un target iSCSI local; sin el iniciador iSCSI el kubelet no puede montarlos.
+#     * nfs-common / nfs-utils: necesario para el modo ReadWriteMany (RWX), que Longhorn
+#       implementa reexportando el volumen por NFS.
+# - El servicio `iscsid` debe quedar arrancado y habilitado en el arranque, si no
+#   longhorn-manager falla al intentar hacer login en los targets iSCSI locales.
 - import_playbook: ../02_k8s_base_ha_3_managers_3_workers/03_configurar_os.yml
 
 - name: Instalar requisitos adicionales de Longhorn (iscsid/nfs) en todos los nodos

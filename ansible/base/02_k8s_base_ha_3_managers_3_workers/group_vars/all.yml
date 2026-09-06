@@ -11,7 +11,7 @@ lxd_network: lxdbr0
 lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,iptable_mangle,iptable_nat,iptable_filter,nf_nat,nf_conntrack"
 
 # Versión de Kubernetes a instalar (repositorio pkgs.k8s.io)
-k8s_major_version: "v1.36"
+k8s_major_version: "v1.37"
 k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
 
 # VIP de alta disponibilidad del plano de control (kube-vip)
@@ -19,10 +19,10 @@ k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
 k8s_vip_address: "10.207.154.49"
 k8s_vip_port: 6443
 k8s_vip_interface: enp5s0
-kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.3"
 
 # Versión del chart de Headlamp
-headlamp_chart_version: "0.43.0"
+headlamp_chart_version: "0.45.0"
 
 # Imágenes de contenedor para verificación básica de deployment (especificar versión, no latest)
 test_nginx_image: "nginx:1.31-alpine"

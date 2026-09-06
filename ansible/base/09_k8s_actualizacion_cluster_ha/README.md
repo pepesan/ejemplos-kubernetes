@@ -1,6 +1,6 @@
-# 🔄 Escenario 09: Actualización de Clúster HA (v1.35 → v1.36)
+# 🔄 Escenario 09: Actualización de Clúster HA (v1.36 → v1.37)
 
-Este laboratorio despliega un clúster de Kubernetes HA de **6 nodos** (idéntico al escenario 02: 3 managers + 3 workers, kube-vip), pero inicialmente en **Kubernetes v1.35**, y a continuación ejecuta el proceso oficial de actualización de `kubeadm` a **v1.36**, nodo a nodo, sin interrumpir la disponibilidad del API server (gracias a la VIP de kube-vip y al `drain`/`uncordon` de cada nodo por turnos).
+Este laboratorio despliega un clúster de Kubernetes HA de **6 nodos** (idéntico al escenario 02: 3 managers + 3 workers, kube-vip), pero inicialmente en **Kubernetes v1.36**, y a continuación ejecuta el proceso oficial de actualización de `kubeadm` a **v1.37**, nodo a nodo, sin interrumpir la disponibilidad del API server (gracias a la VIP de kube-vip y al `drain`/`uncordon` de cada nodo por turnos).
 
 ## 💻 Requisitos del Host
 
@@ -15,7 +15,9 @@ Recursos que este laboratorio reserva en LXD (6 VMs) — el host debe tener al m
 
 ## 📋 Estructura de Playbooks
 
-*   **`02_crear_nodos.yml`** a **`08_unir_workers.yml`**: reutilizan (`import_playbook`) los playbooks del escenario 02 para crear las 6 VMs y formar el clúster HA — con `k8s_major_version: "v1.35"` en `group_vars/all.yml`, así que el clúster arranca en esa versión.
+*   **`02_crear_nodos.yml`** a **`08_unir_workers.yml`**: reutilizan (`import_playbook`) los playbooks del escenario 02 para crear las 6 VMs y formar el clúster HA, con una única excepción:
+    *   **`05_instalar_k8s_tools.yml`** aquí NO es un import — duplica a propósito el contenido del 05 del ejemplo 02. Ansible carga `group_vars` por cada fichero de playbook que participa en la ejecución, así que si fuera un import, la instalación real usaría el `k8s_major_version` del **02** (la versión "estándar" del resto de labs) en vez del `k8s_major_version` de **este** lab — y este laboratorio necesita fijar deliberadamente una versión antigua como punto de partida. Ver el comentario al inicio de ese fichero para el detalle técnico.
+    *   El resto (`02`, `03`, `04`, `06`, `07`, `08`) sí son imports sin cambios: no dependen de `k8s_major_version`, así que no tienen este problema.
 *   **`09_desplegar_headlamp.yml`**: despliega Headlamp Dashboard **justo después de formar el clúster**, antes de empezar la actualización — así se puede seguir en tiempo real desde su consola web cómo van cambiando de versión los nodos.
 *   **`10_actualizar_primer_manager.yml`**: en `k8s-manager1` (el que hizo el `kubeadm init` inicial) — apunta el repositorio APT a la nueva versión, actualiza el paquete `kubeadm`, ejecuta `kubeadm upgrade plan`/`apply`, hace `drain` del nodo, actualiza `kubelet`/`kubectl`, reinicia `kubelet` y hace `uncordon`.
 *   **`11_actualizar_managers_adicionales.yml`**: mismo proceso en `k8s-manager2` y `k8s-manager3`, pero con `kubeadm upgrade node` (no `apply`, reservado al primer nodo) — **uno a uno** (`serial: 1`) para no perder nunca el quórum de etcd ni la disponibilidad de la VIP.
@@ -35,7 +37,7 @@ chmod +x run_all.sh destroy_all.sh
 ./run_all.sh
 ```
 
-Para desplegar solo el clúster en v1.35 sin actualizar todavía (por ejemplo, para observar el "antes" desde Headlamp):
+Para desplegar solo el clúster en v1.36 sin actualizar todavía (por ejemplo, para observar el "antes" desde Headlamp):
 ```bash
 ./run_all.sh --hasta 09
 ```
@@ -62,7 +64,7 @@ Y para completar la actualización después:
 
 ## 📐 Decisiones de Diseño
 
-*   **Clúster inicial en v1.35, no en la versión estándar del resto de laboratorios (v1.36):** es el único laboratorio que fija una versión de Kubernetes distinta a la del resto (`k8s_major_version` propio en su `group_vars/all.yml`), precisamente porque su objetivo es demostrar el salto entre dos versiones consecutivas.
+*   **Clúster inicial en v1.36, no en la versión estándar del resto de laboratorios (v1.37):** es el único laboratorio que fija una versión de Kubernetes distinta a la del resto (`k8s_major_version` propio en su `group_vars/all.yml`), precisamente porque su objetivo es demostrar el salto entre dos versiones consecutivas. Es también, por eso mismo, el único fichero `group_vars/all.yml` de todo el repo en el que `k8s_major_version` NO se mantiene sincronizado con el del ejemplo 02 — aquí debe quedar siempre una versión por detrás de la estándar (hoy v1.36, un paso detrás de la v1.37 del 02), para que siempre quede algo real que actualizar.
 *   **`kubeadm upgrade apply` solo en el primer manager, `kubeadm upgrade node` en el resto:** es el flujo oficial documentado por Kubernetes — el primer nodo del plano de control aplica los cambios a nivel de clúster (nueva versión del `ClusterConfiguration`, certificados, etc.), y el resto de nodos (managers adicionales y workers) solo necesitan sincronizar su configuración local de kubelet con `kubeadm upgrade node`.
 *   **`serial: 1` en managers adicionales y en workers:** actualizar los nodos de uno en uno (nunca en paralelo) es lo que garantiza que la VIP de kube-vip y el quórum de etcd nunca se pierdan durante el proceso — con `serial` sin especificar, Ansible intentaría hacer `drain` de varios nodos a la vez, arriesgando quedarse sin capacidad para reprogramar Pods o incluso perder el quórum si caen 2 de 3 managers a la vez.
 *   **`dpkg_selections` para quitar/poner el "hold" de versión:** los paquetes `kubeadm`/`kubelet`/`kubectl` se marcan con `apt-mark hold` nada más instalarse (ver escenario 02) para evitar actualizaciones automáticas accidentales; hay que liberarlos explícitamente antes de instalar la nueva versión y volver a fijarlos después, o `apt` se negaría a actualizarlos.

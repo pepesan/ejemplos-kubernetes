@@ -12,8 +12,14 @@ lxd_kernel_modules: "overlay,br_netfilter,ip_tables,ip6_tables,ipt_MASQUERADE,ip
 
 # Versión de Kubernetes con la que se despliega el clúster inicialmente.
 # El laboratorio la actualiza después a "k8s_upgrade_target_version".
-k8s_major_version: "v1.35"
-k8s_upgrade_target_version: "v1.36"
+# ⚠️ A diferencia del resto de variables de este fichero, esta NO se sincroniza con el
+# k8s_major_version del ejemplo 02: el objetivo de este lab es precisamente demostrar
+# el salto entre dos versiones consecutivas, así que debe poder fijar una versión
+# "vieja" (la que fue estándar en el resto de labs hasta el bump anterior) aunque el 02
+# ya haya avanzado a una más nueva. Por eso 05_instalar_k8s_tools.yml de ESTE lab ya NO
+# es un import_playbook del 02 (ver ese fichero para el detalle del porqué).
+k8s_major_version: "v1.36"
+k8s_upgrade_target_version: "v1.37"
 k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
 
 # VIP de alta disponibilidad del plano de control (kube-vip)
@@ -21,7 +27,7 @@ k8s_pod_network_cidr: "10.244.0.0/16" # CIDR estándar para Flannel CNI
 k8s_vip_address: "10.207.154.49"
 k8s_vip_port: 6443
 k8s_vip_interface: enp5s0
-kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.1"
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.3"
 
 # Versión del chart de Headlamp
-headlamp_chart_version: "0.43.0"
+headlamp_chart_version: "0.45.0"

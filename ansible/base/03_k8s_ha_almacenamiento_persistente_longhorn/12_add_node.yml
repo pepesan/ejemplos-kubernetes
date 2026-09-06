@@ -1,4 +1,15 @@
 ---
+# Equivalente al 12_adicionar_nodo.yml del ejemplo 02, con estas diferencias:
+# - Se renombra de "adicionar_nodo" a "add_node" porque aquí ya NO añade "un worker"
+#   genérico: el nuevo nodo puede terminar siendo de storage o de workload según cómo
+#   se resuelva en el playbook 13 (en el 02 todo worker es igual, no hay roles).
+# - Este playbook se limita a la infraestructura (VM LXD + `kubeadm join`); a
+#   propósito NO asigna aquí ningún rol de Longhorn (eso lo decide 13_integrar_nodo_
+#   longhorn.yml a continuación), para poder reutilizar este mismo fichero, sin
+#   cambios, en otros escenarios que no usan Longhorn.
+# - El mensaje final ya no dice "nodo worker añadido": indica explícitamente que el
+#   siguiente paso obligatorio es ejecutar 13_integrar_nodo_longhorn.yml para que el
+#   nodo reciba sus labels/taints de Longhorn (por defecto, como storage).
 - name: Preparar infraestructura del nuevo nodo en LXD
   hosts: localhost
   connection: local

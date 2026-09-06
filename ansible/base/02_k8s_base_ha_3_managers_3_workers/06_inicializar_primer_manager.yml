@@ -3,16 +3,25 @@
   hosts: first_manager
   gather_facts: true
   tasks:
+    # Detecta si este manager ya pasó por "kubeadm init" en una ejecución anterior.
+    # El resultado (kubeadm_admin_conf.stat.exists) se usa como guarda de idempotencia
+    # en el resto de tareas de este playbook que no son repetibles por sí mismas.
     - name: Comprobar si Kubernetes ya está inicializado
       ansible.builtin.stat:
         path: /etc/kubernetes/admin.conf
       register: kubeadm_admin_conf
 
+    # kube-vip corre como Static Pod (kubelet lo levanta leyendo el manifiesto de este
+    # directorio, sin pasar por la API de Kubernetes). Si el manifiesto ya existe no hay
+    # que regenerarlo: evita descargar la imagen y volver a crear el fichero en cada run.
     - name: Comprobar si el manifiesto estático de kube-vip ya existe
       ansible.builtin.stat:
         path: /etc/kubernetes/manifests/kube-vip.yaml
       register: kube_vip_manifest
 
+    # kubeadm crea normalmente este directorio durante "kubeadm init", pero kube-vip debe
+    # quedar desplegado ANTES de esa inicialización (el propio "kubeadm init" necesita que
+    # el VIP ya esté respondiendo), así que aquí nos adelantamos a crearlo a mano.
     - name: Asegurar que el directorio /etc/kubernetes/manifests existe
       ansible.builtin.file:
         path: /etc/kubernetes/manifests
@@ -20,12 +29,18 @@
         mode: "0755"
       when: not kube_vip_manifest.stat.exists
 
+    # Se descarga la imagen de kube-vip con containerd (ctr) directamente, sin pasar por
+    # Kubernetes, porque en este punto el clúster todavía no existe.
     - name: Descargar la imagen de kube-vip vía containerd
       ansible.builtin.command: >
         ctr image pull {{ kube_vip_image }}
       when: not kube_vip_manifest.stat.exists
       changed_when: true
 
+    # Truco habitual de kube-vip: se ejecuta el propio contenedor una sola vez como
+    # generador de manifiestos ("kube-vip manifest pod"), y la salida (el YAML del Pod)
+    # se redirige a /etc/kubernetes/manifests/ para que sea kubelet quien lo mantenga vivo
+    # de forma permanente a partir de ahora.
     - name: Generar el manifiesto estático de kube-vip para este manager
       ansible.builtin.shell: >
         ctr run --rm --net-host {{ kube_vip_image }} vip
@@ -38,6 +53,8 @@
       when: not kube_vip_manifest.stat.exists
       changed_when: true
 
+    # Directorio base de configuración de Kubernetes; hace falta antes de escribir el
+    # fichero de configuración de kubeadm en el siguiente paso.
     - name: Asegurar que el directorio /etc/kubernetes existe
       ansible.builtin.file:
         path: /etc/kubernetes
@@ -45,10 +62,17 @@
         mode: "0755"
       when: not kubeadm_admin_conf.stat.exists
 
+    # Fichero de configuración multi-documento para "kubeadm init":
+    # - InitConfiguration: identifica este nodo y el runtime de contenedores (containerd).
+    # - ClusterConfiguration: fija el controlPlaneEndpoint al VIP de kube-vip (no a la IP
+    #   de este manager en concreto), para que managers y workers se unan siempre a través
+    #   de una dirección estable independiente de qué manager esté vivo.
+    # - KubeletConfiguration: desactiva la comprobación de swap y fija el cgroup driver a
+    #   systemd (requisito de containerd en distros modernas).
     - name: Crear archivo de configuración de kubeadm
       ansible.builtin.copy:
         content: |
-          apiVersion: kubeadm.k8s.io/v1beta3
+          apiVersion: kubeadm.k8s.io/v1beta4
           kind: InitConfiguration
           localAPIEndpoint:
             advertiseAddress: "{{ ansible_host }}"
@@ -57,7 +81,7 @@
             criSocket: unix:///var/run/containerd/containerd.sock
             imagePullPolicy: IfNotPresent
           ---
-          apiVersion: kubeadm.k8s.io/v1beta3
+          apiVersion: kubeadm.k8s.io/v1beta4
           kind: ClusterConfiguration
           controlPlaneEndpoint: "{{ k8s_vip_address }}:{{ k8s_vip_port }}"
           networking:
@@ -73,6 +97,10 @@
         mode: "0644"
       when: not kubeadm_admin_conf.stat.exists
 
+    # Inicializa el plano de control en este primer manager. "--upload-certs" sube los
+    # certificados del plano de control cifrados a un Secret del clúster para que los
+    # managers 2 y 3 puedan unirse como control-plane sin copiar certificados a mano.
+    # Se ignoran preflights de SystemVerification/Swap propios de laboratorio en LXD.
     - name: Inicializar el plano de control con kubeadm (endpoint HA + upload-certs)
       ansible.builtin.command: >
         kubeadm init
@@ -83,12 +111,16 @@
       when: not kubeadm_admin_conf.stat.exists
       changed_when: true
 
+    # kubectl busca su configuración en ~/.kube/config por defecto; se prepara el
+    # directorio para el usuario root de este nodo.
     - name: Crear directorio .kube para el usuario root
       ansible.builtin.file:
         path: /root/.kube
         state: directory
         mode: "0755"
 
+    # Copia el kubeconfig de administrador generado por kubeadm para que root pueda
+    # ejecutar kubectl directamente en este manager.
     - name: Copiar configuración de admin.conf a .kube/config
       ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
@@ -96,17 +128,25 @@
         remote_src: true
         mode: "0600"
 
+    # Sin un CNI los Pods se quedan en Pending/ContainerCreating indefinidamente. Se aplica
+    # Flannel como red de Pods, usando el manifiesto oficial más reciente.
     - name: Instalar CNI Flannel
       ansible.builtin.command: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
       register: flannel_install
       changed_when: "'created' in flannel_install.stdout or 'configured' in flannel_install.stdout"
 
+    # Trae el admin.conf del manager al host de control de Ansible, para que las tareas
+    # posteriores delegadas a localhost (aplicar RBAC, etc.) puedan hablar con el clúster
+    # sin necesidad de SSH.
     - name: Descargar admin.conf a la máquina local (kubeconfig.yaml)
       ansible.builtin.fetch:
         src: /etc/kubernetes/admin.conf
         dest: "{{ inventory_dir }}/kubeconfig.yaml"
         flat: true
 
+    # kube-vip necesita permisos RBAC propios en el clúster para hacer leader-election
+    # (decidir qué manager sirve el VIP en cada momento). Se aplica desde el host de
+    # control usando el kubeconfig recién descargado.
     - name: Aplicar el RBAC de kube-vip (necesario para el leader-election de los managers 2 y 3)
       kubernetes.core.k8s:
         kubeconfig: "{{ inventory_dir }}/kubeconfig.yaml"
@@ -114,11 +154,15 @@
         src: "{{ playbook_dir }}/files/kube-vip-rbac.yaml"
       delegate_to: localhost
 
+    # Genera el comando "kubeadm join" (con token y hash del CA) que necesitarán los
+    # workers para unirse al clúster como nodos normales.
     - name: Generar comando de unión para los workers
       ansible.builtin.command: kubeadm token create --print-join-command
       register: join_command_raw
       changed_when: false
 
+    # Persiste ese comando en un fichero local para que el playbook que une a los workers
+    # pueda leerlo más adelante, incluso en una ejecución de Ansible independiente.
     - name: Guardar comando de unión en archivo local
       ansible.builtin.copy:
         content: "{{ join_command_raw.stdout }}"
@@ -126,15 +170,21 @@
         mode: "0600"
       delegate_to: localhost
 
+    # La certificate-key subida por "--upload-certs" en el "kubeadm init" inicial expira
+    # a las 2 horas. Esta tarea la regenera/reimprime bajo demanda, para poder unir a los
+    # managers 2 y 3 en cualquier momento posterior sin depender de esa ventana de tiempo.
     - name: Reimprimir la certificate-key de forma re-ejecutable (para unir más managers)
       ansible.builtin.command: kubeadm init phase upload-certs --upload-certs
       register: upload_certs_out
       changed_when: false
 
+    # La certificate-key es la última línea de la salida del comando anterior.
     - name: Extraer la certificate-key de la salida
       ansible.builtin.set_fact:
         certificate_key: "{{ upload_certs_out.stdout_lines[-1] }}"
 
+    # Se guarda igual que el comando de unión de workers, para que el playbook que une a
+    # los managers 2 y 3 la pueda leer más adelante.
     - name: Guardar la certificate-key en archivo local
       ansible.builtin.copy:
         content: "{{ certificate_key }}"
@@ -142,6 +192,8 @@
         mode: "0600"
       delegate_to: localhost
 
+    # Resumen final para el usuario: cómo apuntar kubectl, desde su máquina física, al
+    # clúster recién creado a través del VIP.
     - name: Mostrar instrucciones para usar kubectl desde el host
       ansible.builtin.debug:
         msg:

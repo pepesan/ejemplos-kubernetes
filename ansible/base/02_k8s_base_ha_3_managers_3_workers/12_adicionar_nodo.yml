@@ -116,7 +116,7 @@
     - name: Guardar comando de unión en un archivo local
       ansible.builtin.copy:
         content: "{{ new_join_cmd.stdout }}"
-        dest: "{{ playbook_dir }}/join_command.txt"
+        dest: "{{ inventory_dir }}/join_command.txt"
         mode: "0600"
       delegate_to: localhost
       become: false
@@ -133,7 +133,7 @@
 
     - name: Leer comando de unión desde el archivo local
       ansible.builtin.slurp:
-        src: "{{ playbook_dir }}/join_command.txt"
+        src: "{{ inventory_dir }}/join_command.txt"
       register: join_cmd_b64
       delegate_to: localhost
       become: false
