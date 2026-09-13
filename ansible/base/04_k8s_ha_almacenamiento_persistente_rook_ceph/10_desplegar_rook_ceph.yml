@@ -11,6 +11,8 @@
       kubernetes.core.helm_repository:
         name: rook-release
         repo_url: https://charts.rook.io/release
+        # force_update refresca el índice del repo aunque ya esté añadido,
+        # para no quedarnos con metadatos de charts obsoletos en reejecuciones.
         force_update: true
 
     - name: Crear namespace rook-ceph si no existe
@@ -30,12 +32,25 @@
         definition:
           apiVersion: v1
           kind: ConfigMap
+          # Rook busca este ConfigMap por nombre fijo ('rook-config-override') y,
+          # si existe, inyecta su contenido como ceph.conf adicional en los
+          # daemons de Ceph (mon, mgr, osd) antes de que el clúster arranque.
           metadata:
             name: rook-config-override
             namespace: rook-ceph
           data:
             config: |
               [global]
+              # mon_max_pg_per_osd limita cuántos placement groups (PGs) puede
+              # alojar cada OSD; Ceph rechaza crear más pools/PGs por encima de
+              # este límite y los marca en warning/error ("too many PGs per OSD").
+              # El valor por defecto de Ceph (250) está pensado para clústeres
+              # con muchos OSDs; aquí solo hay 3 (uno por nodo worker) y cada
+              # pool (ceph-blockpool + ceph-filesystem, con size:3) ya reparte
+              # PGs entre ellos, así que con pocos OSDs se supera 250 enseguida.
+              # Lo subimos a 400 únicamente para permitir que este laboratorio
+              # arranque sin error; en un clúster de producción con más OSDs no
+              # haría falta tocarlo.
               mon_max_pg_per_osd = 400
 
     - name: Instalar o actualizar el operador Rook Ceph usando Helm
@@ -47,6 +62,13 @@
         kubeconfig: "{{ kubeconfig_path }}"
         values:
           crds:
+            # El chart 'rook-ceph' incluye los CustomResourceDefinitions
+            # (CephCluster, CephBlockPool, CephFilesystem, etc.) que necesita
+            # el operador para funcionar. Si ya existieran gestionados por
+            # otro medio (p.ej. instalados aparte para versionarlos con
+            # cuidado en un clúster compartido) se pondría a false para que
+            # Helm no los toque; aquí se dejan en true porque este playbook
+            # es el único que gestiona el ciclo de vida de Rook.
             enabled: true
 
     - name: Esperar a que el operador de Rook Ceph esté listo
@@ -59,25 +81,50 @@
         dest: "{{ rook_values_path }}"
         content: |
           operatorNamespace: rook-ceph
-          
+
           cephClusterSpec:
             cephVersion:
               image: "{{ ceph_image }}"
+            # Rook guarda aquí los datos internos del propio daemon (no los
+            # datos de los OSD, que van en los discos secundarios); debe ser
+            # una ruta persistente en el nodo, no un volumen efímero.
             dataDirHostPath: /var/lib/rook
             mon:
+              # 3 monitores es el mínimo recomendado para tener quorum (2 de 3)
+              # y tolerar la caída de un nodo sin perder el clúster de Ceph.
               count: 3
+              # false obliga a Rook a repartir los 3 mon en nodos distintos en
+              # vez de apilar varios en el mismo nodo, que rompería la
+              # tolerancia a fallos si ese nodo cae.
               allowMultiplePerNode: false
             mgr:
+              # 1 solo mgr: válido para laboratorio, pero sin standby no hay
+              # alta disponibilidad del manager si ese pod muere.
               count: 1
             dashboard:
               enabled: true
+              # ssl: false sirve el dashboard en HTTP plano; simplifica el
+              # NodePort de abajo pero no debe usarse así fuera de un laboratorio.
               ssl: false
             storage:
+              # useAllNodes/useAllDevices delegan en Rook la detección
+              # automática: usará cualquier nodo del clúster y cualquier disco
+              # sin particionar/sin filesystem que encuentre (aquí, /dev/vdb en
+              # cada worker) en vez de que se listen explícitamente.
               useAllNodes: true
               useAllDevices: true
               config:
+                # Tamaño de la partición RocksDB/WAL que BlueStore reserva en
+                # metadatos por OSD; en OSDs sobre disco simple (sin SSD
+                # aparte para journal/DB) 1024 MB es un valor mínimo razonable
+                # de laboratorio, no un ajuste para cargas de producción.
                 databaseSizeMB: "1024"
                 journalSizeMB: "1024"
+            # Límites/peticiones de CPU y memoria por tipo de pod de Ceph.
+            # Son deliberadamente bajos (pensados para un laboratorio con
+            # pocos recursos, no para producción) y evitan que un solo
+            # componente de Ceph acapare todo el nodo o quede sin 'requests'
+            # (lo que dificultaría el scheduling de Kubernetes).
             resources:
               mgr:
                 limits:
@@ -92,12 +139,18 @@
                   cpu: "200m"
                   memory: "512Mi"
               osd:
+                # El OSD es el proceso que más recursos consume (gestiona el
+                # disco y sirve I/O real), de ahí que tenga el límite más alto
+                # del grupo.
                 limits:
                   memory: "2Gi"
                 requests:
                   cpu: "500m"
                   memory: "1Gi"
               prepareosd:
+                # Job de un solo uso que prepara el disco antes de que exista
+                # el OSD definitivo; sin 'limits' porque termina enseguida y
+                # no necesita techo, solo un 'request' mínimo para el scheduler.
                 requests:
                   cpu: "100m"
                   memory: "50Mi"
@@ -123,16 +176,28 @@
           cephBlockPools:
             - name: ceph-blockpool
               spec:
+                # failureDomain: host reparte las réplicas de cada PG entre
+                # nodos distintos (no entre discos del mismo nodo), para que
+                # la caída de un worker no arrastre dos réplicas a la vez.
                 failureDomain: host
                 replicated:
+                  # 3 réplicas por objeto: tolera perder 1 nodo sin perder
+                  # datos ni quedarse en modo solo-lectura (necesita 2 de 3).
                   size: 3
               storageClass:
                 enabled: true
                 name: ceph-block
+                # Esta StorageClass (RBD, acceso ReadWriteOnce) queda como
+                # predeterminada del clúster: cualquier PVC sin storageClassName
+                # explícito la usará a ella.
                 isDefault: true
+                # Delete borra el volumen RBD subyacente al borrar el PVC; en
+                # un laboratorio evita dejar volúmenes huérfanos, pero en
+                # producción normalmente se preferiría 'Retain'.
                 reclaimPolicy: Delete
                 allowVolumeExpansion: true
                 parameters:
+                  # Formato de imagen RBD v2, requerido por 'imageFeatures: layering'.
                   imageFormat: "2"
                   imageFeatures: layering
                   csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
@@ -143,12 +208,17 @@
                   csi.storage.k8s.io/controller-publish-secret-namespace: rook-ceph
                   csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
                   csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+                  # ext4 es el filesystem con el que el driver CSI formatea
+                  # cada volumen RBD nuevo antes de montarlo en el pod.
                   csi.storage.k8s.io/fstype: ext4
 
           cephFileSystems:
             - name: ceph-filesystem
               spec:
                 metadataPool:
+                  # Los metadatos de CephFS son pequeños pero críticos: se
+                  # replican con la misma redundancia (size: 3) que los datos,
+                  # ya que perderlos inutiliza todo el filesystem.
                   replicated:
                     size: 3
                 dataPools:
@@ -158,10 +228,17 @@
                       size: 3
                 metadataServer:
                   activeCount: 1
+                  # activeStandby mantiene un MDS de reserva ya "caliente"
+                  # (con el mapa de metadatos precargado) para que, si el MDS
+                  # activo cae, el failover sea casi instantáneo en vez de
+                  # tener que levantar un MDS desde cero.
                   activeStandby: true
               storageClass:
                 enabled: true
                 name: ceph-filesystem
+                # No es la StorageClass por defecto: hay que pedirla de forma
+                # explícita con storageClassName cuando se necesite acceso
+                # ReadWriteMany (CephFS), a diferencia de 'ceph-block' (RWO).
                 isDefault: false
                 reclaimPolicy: Delete
                 allowVolumeExpansion: true
@@ -183,7 +260,14 @@
         kubeconfig: "{{ kubeconfig_path }}"
         values_files:
           - "{{ rook_values_path }}"
+        # server_side aplica el manifiesto vía Server-Side Apply de Kubernetes
+        # (en vez del cálculo de diff en el cliente); es necesario porque el
+        # CRD CephCluster de Rook incluye campos muy grandes que el apply
+        # tradicional del cliente puede rechazar por tamaño de anotación.
         server_side: true
+        # force_conflicts resuelve a favor de este playbook cualquier campo
+        # que otro controller (p.ej. el propio operador de Rook) ya gestione,
+        # en vez de fallar con un conflicto de "field manager".
         force_conflicts: true
 
     - name: Eliminar el archivo de valores temporal
@@ -196,6 +280,10 @@
         kubectl --kubeconfig={{ kubeconfig_path }} wait --namespace rook-ceph
         --for=condition=ready pod -l app=rook-ceph-mon --timeout=300s
       register: wait_mon
+      # 'kubectl wait' falla inmediatamente si los pods aún no existen (en
+      # vez de esperarlos), así que hay que reintentar la propia llamada a
+      # 'kubectl wait' hasta que los mon ya se hayan creado y podamos esperar
+      # de verdad a que estén ready.
       until: wait_mon.rc == 0
       retries: 30
       delay: 10
@@ -226,6 +314,10 @@
       retries: 30
       delay: 10
       changed_when: false
+      # failed_when: false evita abortar el playbook si se agotan los
+      # reintentos: el secreto puede tardar más en aparecer en clústeres
+      # lentos y preferimos seguir e intentar leerlo más abajo antes que
+      # cortar aquí el despliegue.
       failed_when: false
 
     - name: Exponer Ceph Dashboard como NodePort en el puerto 32070
@@ -264,6 +356,8 @@
 
     - name: Decodificar contraseña de Ceph Dashboard
       ansible.builtin.set_fact:
+        # El Secret de Kubernetes guarda el valor en base64 (así lo devuelve
+        # jsonpath); hay que decodificarlo aquí para obtener la contraseña real.
         ceph_dashboard_password: "{{ ceph_password_raw.stdout | ansible.builtin.b64decode }}"
 
     - name: Guardar la contraseña de Ceph Dashboard en un archivo local

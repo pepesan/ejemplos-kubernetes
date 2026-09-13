@@ -28,6 +28,10 @@
             name: rbd-pvc-rwo
             namespace: test-ceph-persistence
           spec:
+            # ReadWriteOnce: un volumen RBD solo puede montarse de lectura-
+            # escritura en un único nodo a la vez; es la prueba de la
+            # StorageClass 'ceph-block' (backend RBD), pensada para un solo
+            # pod/réplica (bases de datos, discos exclusivos, etc.).
             accessModes:
               - ReadWriteOnce
             storageClassName: ceph-block
@@ -39,6 +43,9 @@
       ansible.builtin.command: >
         kubectl --kubeconfig={{ kubeconfig_path }} get pvc rbd-pvc-rwo -n test-ceph-persistence -o jsonpath='{.status.phase}'
       register: rbd_pvc_status
+      # 'Bound' confirma que el aprovisionador CSI de RBD ya creó la imagen
+      # Ceph y la enlazó al PVC; sin este PV no existe aún y el Pod que lo
+      # monte se quedaría en Pending.
       until: rbd_pvc_status.stdout == 'Bound'
       retries: 30
       delay: 5
@@ -60,6 +67,9 @@
                 image: "{{ test_alpine_image }}"
                 command: ["/bin/sh", "-c"]
                 args:
+                  # Escribe una vez al arrancar y luego 'sleep 3600' mantiene
+                  # el contenedor vivo el tiempo suficiente para poder hacer
+                  # 'kubectl exec' y leer el fichero antes de que termine.
                   - >
                     echo "Hola desde RBD en el pod rbd-writer-pod" > /mnt/rbd-data/rbd-log.txt;
                     sleep 3600
@@ -84,6 +94,9 @@
       ansible.builtin.command: >
         kubectl --kubeconfig={{ kubeconfig_path }} exec -n test-ceph-persistence rbd-writer-pod -- cat /mnt/rbd-data/rbd-log.txt
       register: rbd_file_content
+      # Esta es la prueba real: si el 'exec' puede leer el mismo contenido
+      # que se escribió al arrancar el Pod, el volumen RBD persiste los datos
+      # correctamente (no es un tmpfs/emptyDir efímero).
       changed_when: false
 
     # 2. PRUEBA CephFS (ReadWriteMany - RWX)
@@ -98,6 +111,10 @@
             name: cephfs-pvc-rwx
             namespace: test-ceph-persistence
           spec:
+            # ReadWriteMany: a diferencia de RBD, CephFS sí permite montar el
+            # mismo volumen de lectura-escritura en varios nodos/pods a la
+            # vez; es justo lo que se prueba abajo con 2 réplicas compartiendo
+            # el mismo PVC.
             accessModes:
               - ReadWriteMany
             storageClassName: ceph-filesystem
@@ -125,6 +142,10 @@
             name: cephfs-rwx-writer
             namespace: test-ceph-persistence
           spec:
+            # 2 réplicas montando el mismo PVC RWX simultáneamente: es la
+            # parte de la prueba que RBD no podría soportar (ReadWriteOnce
+            # solo admite un montador a la vez); con CephFS ambos pods
+            # escriben al mismo fichero sin conflicto.
             replicas: 2
             selector:
               matchLabels:
@@ -139,6 +160,11 @@
                     image: "{{ test_alpine_image }}"
                     command: ["/bin/sh", "-c"]
                     args:
+                      # Bucle infinito en vez de una escritura única: cada
+                      # réplica añade su propia línea (identificada por su
+                      # ${HOSTNAME}) al mismo fichero compartido, para poder
+                      # comprobar después que las escrituras de ambos pods
+                      # conviven en el mismo archivo sin pisarse.
                       - >
                         while true; do
                           echo "$(date): Hola compartiendo datos desde ${HOSTNAME}" >> /mnt/shared-cephfs/logs.txt;
@@ -158,6 +184,9 @@
       changed_when: false
 
     - name: Pausar 12 segundos para permitir que los pods escriban en CephFS
+      # El bucle de arriba escribe cada 5s; con 12s de margen nos aseguramos
+      # de que ambas réplicas ya hayan escrito al menos una línea cada una
+      # antes de comprobar el fichero compartido.
       ansible.builtin.pause:
         seconds: 12
 
@@ -165,12 +194,18 @@
       ansible.builtin.command: >
         kubectl --kubeconfig={{ kubeconfig_path }} get pods -n test-ceph-persistence -l app=cephfs-writer -o jsonpath='{.items[0].metadata.name}'
       register: cephfs_pod_name
+      # Da igual desde qué réplica se lea: al ser RWX, el fichero es el mismo
+      # para las dos, así que basta con hacer 'exec' en cualquiera de los pods
+      # del Deployment (el primero que devuelva el selector).
       changed_when: false
 
     - name: Comprobar el contenido del archivo de logs compartido en CephFS
       ansible.builtin.command: >
         kubectl --kubeconfig={{ kubeconfig_path }} exec -n test-ceph-persistence {{ cephfs_pod_name.stdout }} -- cat /mnt/shared-cephfs/logs.txt
       register: cephfs_file_content
+      # Si aparecen líneas de ambos ${HOSTNAME} (los dos pods) en el mismo
+      # fichero, queda demostrado que el volumen es realmente compartido
+      # (RWX) y no uno distinto por pod.
       changed_when: false
 
     - name: Mostrar resultados de verificación

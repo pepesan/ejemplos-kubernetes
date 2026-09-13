@@ -28,6 +28,11 @@
                 labels:
                   app: rook-ceph-tools
               spec:
+                # El toolbox no trae por sí solo credenciales ni endpoints de
+                # los monitores: este initContainer genera /etc/ceph/ceph.conf
+                # y /etc/ceph/keyring a partir de los Secrets/ConfigMaps que
+                # el propio operador de Rook mantiene actualizados, antes de
+                # que arranque el contenedor principal.
                 initContainers:
                   - name: generar-ceph-conf
                     image: "{{ ceph_image }}"
@@ -44,11 +49,18 @@
                         key = $ROOK_CEPH_SECRET
                         KEYRING
                     env:
+                      # Secret gestionado por Rook con la clave admin del
+                      # clúster Ceph (equivalente a /etc/ceph/keyring en un
+                      # despliegue Ceph tradicional).
                       - name: ROOK_CEPH_SECRET
                         valueFrom:
                           secretKeyRef:
                             name: rook-ceph-mon
                             key: ceph-secret
+                      # ConfigMap con la lista de monitores vigente (formato
+                      # 'a=ip:puerto,b=ip:puerto,...'); el 'sed' de arriba
+                      # quita las letras de identificación de cada mon para
+                      # dejar solo la lista de endpoints que espera mon_host.
                       - name: ROOK_MON_ENDPOINTS
                         valueFrom:
                           configMapKeyRef:
@@ -60,11 +72,18 @@
                 containers:
                   - name: rook-ceph-tools
                     image: "{{ ceph_image }}"
+                    # El contenedor no ejecuta ningún demonio Ceph: solo se
+                    # mantiene vivo para poder hacer 'kubectl exec ... -- ceph ...'
+                    # con el cliente 'ceph' ya configurado por el initContainer.
                     command: ["/bin/bash", "-c", "sleep infinity"]
                     volumeMounts:
                       - name: ceph-config
                         mountPath: /etc/ceph
                 volumes:
+                  # emptyDir compartido entre el initContainer y el contenedor
+                  # principal: solo necesita sobrevivir mientras vive el pod,
+                  # no aporta persistencia real (el propio toolbox no guarda
+                  # estado).
                   - name: ceph-config
                     emptyDir: {}
 
@@ -88,15 +107,27 @@
         create_namespace: true
         kubeconfig: "{{ kubeconfig_path }}"
         values:
+          # Se desactivan los componentes que no hacen falta para este
+          # laboratorio (solo se quiere el server de Prometheus scrapeando
+          # métricas de Ceph, no alertas ni un pushgateway).
           alertmanager:
             enabled: false
           prometheus-pushgateway:
             enabled: false
           server:
+            # Sin PVC: los datos de Prometheus quedan en almacenamiento
+            # efímero del pod: válido para un laboratorio de solo lectura de
+            # métricas, pero se pierde el histórico si el pod se reprograma.
             persistentVolume:
               enabled: false
+          # Añade el exporter de métricas del propio Ceph mgr (puerto 9283,
+          # habilitado por el módulo 'prometheus' de Ceph que Rook activa por
+          # defecto) como scrape target adicional a los que ya trae el chart.
           extraScrapeConfigs: |
             - job_name: 'rook-ceph-mgr'
+              # honor_labels evita que Prometheus sobrescriba las labels que
+              # ya trae cada métrica exportada por Ceph con las suyas propias
+              # (p.ej. 'instance'), conservando las originales del exporter.
               honor_labels: true
               static_configs:
                 - targets: ['rook-ceph-mgr.rook-ceph.svc.cluster.local:9283']
