@@ -37,6 +37,25 @@
         state: started
         enabled: true
 
+    # El paquete 'ceph-common' del repositorio de Ubuntu queda fijado a una
+    # versión concreta (ej. 20.2.0), mientras que 'cephadm bootstrap' sin
+    # --image descarga por defecto la última imagen de la tag flotante
+    # "vXX" (ej. quay.io/ceph/ceph:v20 → 20.2.4 en el momento de escribir
+    # esto). Ambas versiones pueden divergir en el formato interno del
+    # keyring, y entonces la CLI 'ceph' del host (más antigua) no consigue
+    # parsear el keyring generado por los daemons del contenedor (más
+    # nuevo): falla con "Malformed input [buffer:N]" al intentar cualquier
+    # comando, aunque el clúster esté sano. Fijar aquí la misma versión
+    # exacta que se acaba de instalar por apt evita esa divergencia.
+    - name: Obtener la versión exacta de Ceph instalada por apt en el host
+      ansible.builtin.command: ceph --version
+      register: ceph_version_out
+      changed_when: false
+
+    - name: Guardar la versión de Ceph en memoria (para pinear la imagen de cephadm)
+      ansible.builtin.set_fact:
+        ceph_installed_version: "{{ ceph_version_out.stdout.split(' ')[2] }}"
+
 - name: Inicializar Clúster Ceph en el nodo Monitor (ceph-mon)
   hosts: ceph_monitors
   become: true
@@ -64,8 +83,17 @@
       # que espera para identificar el nodo); el hostname de las VMs de LXD
       # en este laboratorio sí incluye el dominio, así que hay que permitirlo
       # explícitamente o el bootstrap falla antes de arrancar ningún daemon.
+      # --image: fija la imagen de contenedor a la misma versión de Ceph que
+      # el 'ceph-common' instalado por apt en el host (ver tarea anterior,
+      # ceph_installed_version); sin esto, cephadm usa la tag flotante "vXX"
+      # (la última patch release disponible), que puede no coincidir con la
+      # versión del paquete apt y producir un keyring que la CLI del host no
+      # sabe parsear. El repositorio de la imagen es configurable en
+      # group_vars/all.yml (ceph_container_image_repo); el tag no, a propósito.
       ansible.builtin.command: >
-        cephadm bootstrap
+        cephadm
+        --image {{ ceph_container_image_repo }}:v{{ ceph_installed_version }}
+        bootstrap
         --mon-ip {{ ansible_host }}
         --initial-dashboard-user admin
         --initial-dashboard-password {{ ceph_dashboard_password | quote }}

@@ -31,13 +31,13 @@ Recursos que este laboratorio reserva en LXD (10 VMs: clúster k8s + clúster Ce
 
 ```mermaid
 graph TD
-    subgraph Clúster Kubernetes (LXD)
+    subgraph "Clúster Kubernetes (LXD)"
         Manager["k8s-manager (10.207.154.50)<br/>Control Plane"]
         Worker1["k8s-worker1 (10.207.154.51)<br/>Worker Cómputo"]
         Worker2["k8s-worker2 (10.207.154.52)<br/>Worker Cómputo"]
     end
 
-    subgraph Clúster Ceph Externo (LXD)
+    subgraph "Clúster Ceph Externo (LXD)"
         Mon["ceph-mon (10.207.154.60)<br/>Monitor & Manager Ceph"]
         OSD1["ceph-osd1 (10.207.154.61)<br/>OSD Storage (/dev/vdb)"]
         OSD2["ceph-osd2 (10.207.154.62)<br/>OSD Storage (/dev/vdb)"]

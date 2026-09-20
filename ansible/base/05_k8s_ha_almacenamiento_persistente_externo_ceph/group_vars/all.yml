@@ -26,6 +26,15 @@ headlamp_chart_version: "0.45.0"
 # Versión del chart de ceph-csi-operator/ceph-csi-drivers
 ceph_csi_chart_version: "1.0.4"
 
+# Repositorio de la imagen de contenedor que usa 'cephadm bootstrap' para los
+# daemons de Ceph (mon/mgr/osd/...). El tag (versión exacta) NO se fija aquí
+# a propósito: se detecta en tiempo de ejecución a partir del paquete
+# 'ceph-common' instalado por apt en el host (ver 10_desplegar_ceph_externo.yml),
+# para que la CLI 'ceph' del host y los daemons del contenedor sean siempre
+# la misma versión — si divergen, la CLI del host no sabe parsear el keyring
+# que generan los daemons ("Malformed input [buffer:N]").
+ceph_container_image_repo: "quay.io/ceph/ceph"
+
 # Tamaño del PVC de prueba usado para verificar la persistencia
 ceph_externo_test_pvc_size: "1Gi"
 
