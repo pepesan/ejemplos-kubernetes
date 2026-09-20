@@ -56,8 +56,8 @@
       ansible.builtin.set_fact:
         ceph_installed_version: "{{ ceph_version_out.stdout.split(' ')[2] }}"
 
-- name: Inicializar Clúster Ceph en el nodo Monitor (ceph-mon)
-  hosts: ceph_monitors
+- name: Inicializar Clúster Ceph en el primer nodo de control (mon+mgr)
+  hosts: ceph_control_bootstrap
   become: true
   gather_facts: false
   vars:
@@ -112,8 +112,12 @@
       ansible.builtin.set_fact:
         ceph_ssh_key: "{{ ceph_pub_key_b64.content | b64decode }}"
 
-- name: Distribuir clave SSH de Ceph a los nodos OSD
-  hosts: ceph_osds
+- name: Distribuir clave SSH de Ceph a los nodos OSD y de control adicionales
+  # El nodo de bootstrap (ceph_control_bootstrap) no necesita esta distribución:
+  # cephadm añade su propia clave pública a su propio authorized_keys durante
+  # el bootstrap. Solo hacen falta los nodos OSD y los 2 nodos de control
+  # adicionales (mon+mgr) que el orquestador todavía no puede alcanzar por SSH.
+  hosts: ceph_osds:ceph_control_additional
   become: true
   gather_facts: false
   tasks:
@@ -121,10 +125,10 @@
       ansible.builtin.authorized_key:
         user: root
         state: present
-        key: "{{ hostvars[groups['ceph_monitors'][0]]['ceph_ssh_key'] }}"
+        key: "{{ hostvars[groups['ceph_control_bootstrap'][0]]['ceph_ssh_key'] }}"
 
-- name: Integrar OSDs y aprovisionar almacenamiento en el Clúster Ceph
-  hosts: ceph_monitors
+- name: Integrar OSDs, nodos de control y aprovisionar almacenamiento en el Clúster Ceph
+  hosts: ceph_control_bootstrap
   become: true
   gather_facts: false
   vars:
@@ -147,6 +151,101 @@
         - host_add_out.rc != 0
         - "'already exists' not in host_add_out.stderr"
       changed_when: "'Added host' in host_add_out.stdout"
+
+    - name: Añadir los 2 nodos de control adicionales (mon+mgr) al orquestador Ceph
+      # Solo los 2 adicionales: el nodo de bootstrap (ceph_control_bootstrap) ya
+      # queda registrado automáticamente por 'cephadm bootstrap' como su propio
+      # primer host, no hace falta (ni conviene) volver a darlo de alta aquí.
+      ansible.builtin.command: >
+        ceph orch host add {{ item }} {{ hostvars[item].ansible_host }}
+      loop: "{{ groups['ceph_control_additional'] }}"
+      register: mgr_host_add_out
+      failed_when:
+        - mgr_host_add_out.rc != 0
+        - "'already exists' not in mgr_host_add_out.stderr"
+      changed_when: "'Added host' in mgr_host_add_out.stdout"
+
+    # 'cephadm bootstrap' solo distribuye /etc/ceph/ceph.conf y el keyring de
+    # client.admin al propio host de bootstrap (el único con la etiqueta
+    # '_admin' por defecto). Sin este paso, si ese nodo cae o se destruye
+    # (ej. al escalar/quitar nodos de ceph_control), ningún otro nodo de
+    # control puede ejecutar comandos 'ceph' con privilegios de admin — los
+    # comandos delegados a ellos fallan de forma silenciosa si la tarea que
+    # los ejecuta tiene 'failed_when: false' (ver 16_eliminar_nodo.yml).
+    # Etiquetar los 2 nodos adicionales como '_admin' hace que cephadm les
+    # distribuya también la config y el keyring, para que cualquiera de los
+    # 3 nodos de ceph_control pueda administrar el clúster, no solo el de
+    # bootstrap.
+    - name: Etiquetar los nodos de control adicionales como '_admin' (acceso admin en los 3)
+      ansible.builtin.command: >
+        ceph orch host label add {{ item }} _admin
+      loop: "{{ groups['ceph_control_additional'] }}"
+      register: admin_label_out
+      changed_when: "'Added label' in admin_label_out.stdout"
+
+    - name: Esperar a que ceph.conf y el keyring de admin lleguen a los nodos etiquetados
+      ansible.builtin.stat:
+        path: /etc/ceph/ceph.client.admin.keyring
+      register: admin_keyring_stat
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['ceph_control_additional'] }}"
+      until: admin_keyring_stat.stat.exists
+      retries: 24
+      delay: 5
+
+    - name: Comprobar el placement actual de la especificación de mgr
+      # A diferencia de osd.all-available-devices (que no existe hasta que se
+      # aplica más abajo), aquí SIEMPRE hay una spec de mgr desde el propio
+      # 'cephadm bootstrap' inicial (colocada por defecto en el nodo de
+      # bootstrap). Por eso no basta con "existe o no" para decidir cuándo hay
+      # cambio real: hay que comparar el placement actual contra el deseado.
+      ansible.builtin.command: ceph orch ls --service-name mgr --format json
+      register: mgr_spec_check
+      changed_when: false
+
+    - name: Aplicar 3 managers repartidos en los nodos de control dedicados (mon+mgr)
+      ansible.builtin.command: >
+        ceph orch apply mgr --placement="{{ groups['ceph_control'] | join(',') }}"
+      # 'ceph orch apply mgr' devuelve rc=0 con "Scheduled" tanto si cambia el
+      # placement como si se reaplica el mismo; se compara explícitamente la
+      # lista de hosts de la spec actual (mgr_spec_check, leído antes de este
+      # 'apply') contra la deseada para no marcar "changed" en cada
+      # reejecución. 'default([])' cubre el caso de que la spec inicial del
+      # bootstrap use placement por "count" en vez de una lista de hosts.
+      changed_when: >-
+        (mgr_spec_check.stdout | from_json | first).placement.hosts | default([]) | sort
+        != groups['ceph_control'] | sort
+
+    - name: Esperar a que los 3 managers estén activos (1 activo + 2 standby)
+      ansible.builtin.command: ceph orch ps --daemon-type mgr -f json
+      register: mgr_ps
+      until: (mgr_ps.stdout | from_json | length) >= 3
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Comprobar el placement actual de la especificación de mon
+      # Mismo razonamiento que con mgr: 'cephadm bootstrap' ya deja una spec de
+      # mon con el nodo de bootstrap desde el principio, así que hay que
+      # comparar placement actual vs. deseado, no solo "existe o no".
+      ansible.builtin.command: ceph orch ls --service-name mon --format json
+      register: mon_spec_check
+      changed_when: false
+
+    - name: Aplicar 3 monitores repartidos en los nodos de control dedicados (mon+mgr)
+      ansible.builtin.command: >
+        ceph orch apply mon --placement="{{ groups['ceph_control'] | join(',') }}"
+      changed_when: >-
+        (mon_spec_check.stdout | from_json | first).placement.hosts | default([]) | sort
+        != groups['ceph_control'] | sort
+
+    - name: Esperar a que los 3 monitores estén en quorum
+      ansible.builtin.command: ceph quorum_status -f json
+      register: mon_quorum
+      until: (mon_quorum.stdout | from_json).quorum_names | length >= 3
+      retries: 30
+      delay: 10
+      changed_when: false
 
     - name: Comprobar si ya existe la especificación osd.all-available-devices
       # 'ceph orch apply osd --all-available-devices' es en sí mismo idempotente
@@ -179,17 +278,33 @@
       register: ceph_health
       changed_when: false
 
+    - name: Averiguar qué nodo aloja el mgr activo ahora mismo (para dar una URL real, no genérica)
+      ansible.builtin.command: ceph mgr dump -f json
+      register: mgr_dump
+      changed_when: false
+
+    - name: Resolver la IP del nodo con el mgr activo
+      ansible.builtin.set_fact:
+        # 'active_name' viene como '<hostname>.<random>' (ej. 'ceph-mgr2.abcde');
+        # se recorta al primer segmento para poder buscarlo en hostvars.
+        active_mgr_host: "{{ (mgr_dump.stdout | from_json).active_name.split('.')[0] }}"
+
     - name: Mostrar datos del clúster
       ansible.builtin.debug:
         msg:
           - "════════════════════════════════════════════════════════════════"
           - "  ¡CLÚSTER CEPH EXTERNO BOOTSTRAPEADO CON ÉXITO!"
           - "  "
-          - "  Monitor IP: {{ ansible_host }}"
+          - "  Nodo de bootstrap: {{ ansible_host }}"
           - "  Estado de Salud: {{ ceph_health.stdout }}"
           - "  Nodos OSD integrados: {{ groups['ceph_osds'] | join(', ') }}"
+          - "  Nodos de control (mon+mgr, 3 en HA): {{ groups['ceph_control'] | join(', ') }}"
           - "  "
-          - "  Ceph Dashboard: https://{{ ansible_host }}:8443 (certificado autofirmado)"
+          - "  Ceph Dashboard (mgr activo ahora mismo, {{ active_mgr_host }}):"
+          - "    https://{{ hostvars[active_mgr_host].ansible_host }}:8443 (certificado autofirmado)"
+          - "  Si ese nodo cae, el mgr standby toma el relevo automáticamente en otra IP"
+          - "  de este mismo grupo — vuelve a mirar 'ceph mgr dump' o usa cualquiera de:"
+          - "  {{ groups['ceph_control'] | map('extract', hostvars, 'ansible_host') | map('regex_replace', '^(.*)$', 'https://\\1:8443') | join(' , ') }}"
           - "  Usuario: admin"
           - "  Contraseña guardada de forma segura en: {{ playbook_dir }}/ceph_dashboard_password.txt"
           - "════════════════════════════════════════════════════════════════"

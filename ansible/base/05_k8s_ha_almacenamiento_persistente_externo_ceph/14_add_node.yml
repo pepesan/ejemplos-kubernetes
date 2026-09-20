@@ -195,5 +195,5 @@
           - "  "
           - "  Si has añadido nodos Ceph OSD, ejecuta ahora para integrarlos"
           - "  en el clúster Ceph Externo:"
-          - "  ansible-playbook 14_integrar_nodo_ceph_externo.yml"
+          - "  ansible-playbook 15_integrar_nodo_ceph_externo.yml"
           - "════════════════════════════════════════════════════════════════"

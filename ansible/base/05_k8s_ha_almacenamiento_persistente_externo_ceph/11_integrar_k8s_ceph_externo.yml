@@ -1,16 +1,51 @@
 ---
 - name: Obtener credenciales y datos del Clúster Ceph Externo
-  hosts: ceph_monitors
+  hosts: ceph_control_bootstrap
   become: true
   gather_facts: false
   tasks:
     - name: Crear el pool RBD para los volúmenes de Kubernetes
-      ansible.builtin.command: ceph osd pool create rbd-k8s
+      # size se fija explícitamente en vez de heredar osd_pool_default_size
+      # del clúster (3 por defecto): así queda auto-documentado el nivel de
+      # réplica que este laboratorio espera, en vez de depender de un valor
+      # implícito. min_size NO admite 'ceph osd pool create --min-size' (el
+      # comando solo acepta 'size' como argumento posicional; --min-size da
+      # "Unexpected argument"), así que se fija aparte con 'pool set' justo
+      # debajo.
+      ansible.builtin.command: ceph osd pool create rbd-k8s --size 3
       register: rbd_pool_create
       failed_when:
         - rbd_pool_create.rc != 0
         - "'already exists' not in rbd_pool_create.stderr"
       changed_when: "'created pool' in rbd_pool_create.stdout"
+
+    - name: Comprobar el min_size actual del pool rbd-k8s
+      # 'ceph osd pool set min_size' siempre devuelve rc=0 con "set pool ...
+      # min_size to N" tanto si cambia el valor como si ya estaba en N; sin
+      # esta comprobación previa, Ansible marcaría la tarea siguiente como
+      # "changed" en todas las reejecuciones.
+      ansible.builtin.command: ceph osd pool get rbd-k8s min_size -f json
+      register: rbd_pool_min_size_check
+      changed_when: false
+
+    - name: Fijar min_size explícitamente en el pool rbd-k8s
+      ansible.builtin.command: ceph osd pool set rbd-k8s min_size 2
+      changed_when: "(rbd_pool_min_size_check.stdout | from_json).min_size != 2"
+
+    - name: Comprobar el número de réplicas configurado en el pool rbd-k8s
+      ansible.builtin.command: ceph osd pool get rbd-k8s size -f json
+      register: rbd_pool_size
+      changed_when: false
+
+    - name: Verificar que el número de OSDs disponibles soporta el nivel de réplica configurado
+      ansible.builtin.assert:
+        that:
+          - (rbd_pool_size.stdout | from_json).size <= (groups['ceph_osds'] | length)
+        fail_msg: >-
+          El pool rbd-k8s pide {{ (rbd_pool_size.stdout | from_json).size }} réplicas pero solo
+          hay {{ groups['ceph_osds'] | length }} nodos OSD — con el dominio de fallo por
+          defecto (host), Ceph nunca podrá colocar todas las réplicas y el pool quedará
+          degradado (HEALTH_WARN) de forma permanente.
 
     - name: Inicializar el pool como pool de aplicación RBD
       ansible.builtin.command: rbd pool init rbd-k8s
@@ -37,9 +72,12 @@
   gather_facts: false
   vars:
     kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
-    ceph_mon_ip: "{{ hostvars[groups['ceph_monitors'][0]]['ansible_host'] }}"
-    ceph_fsid: "{{ hostvars[groups['ceph_monitors'][0]]['ceph_fsid'] }}"
-    ceph_admin_key: "{{ hostvars[groups['ceph_monitors'][0]]['ceph_admin_key'] }}"
+    # IPs de los 3 nodos de control (mon+mgr en HA); se usan todas en el mapa
+    # 'monitors' de abajo para que el driver CSI pueda seguir resolviendo el
+    # clúster Ceph aunque caiga cualquiera de los 3 mon.
+    ceph_mon_ips: "{{ groups['ceph_control'] | map('extract', hostvars, 'ansible_host') | list }}"
+    ceph_fsid: "{{ hostvars[groups['ceph_control_bootstrap'][0]]['ceph_fsid'] }}"
+    ceph_admin_key: "{{ hostvars[groups['ceph_control_bootstrap'][0]]['ceph_admin_key'] }}"
   tasks:
     - name: Crear namespace de almacenamiento ceph-csi
       kubernetes.core.k8s:
@@ -114,15 +152,15 @@
             # de abajo, y es como el driver CSI localiza a qué clúster Ceph
             # pertenece cada volumen.
             - name: "{{ ceph_fsid }}"
-              monitors:
-                # La clave ('mon-a') es solo una etiqueta interna arbitraria
-                # para identificar esta entrada dentro del mapa de monitores;
-                # no tiene que coincidir con el nombre real del daemon mon en
-                # Ceph. El valor sí importa: host:puerto del monitor real.
-                mon-a: "{{ ceph_mon_ip }}:6789"
-                # Este laboratorio solo tiene un monitor Ceph (ceph_monitors
-                # con un único host), por lo que no hay más entradas que
-                # añadir aquí para alta disponibilidad de monitores.
+              # Las claves ('mon-a', 'mon-b', ...) son solo etiquetas internas
+              # arbitrarias para identificar cada entrada dentro del mapa de
+              # monitores; no tienen que coincidir con el nombre real de cada
+              # daemon mon en Ceph. Lo que importa es el valor: host:puerto de
+              # cada monitor real. Se listan los 3 nodos de ceph_control (mon
+              # en HA) para que el driver CSI conserve conectividad aunque
+              # caiga cualquiera de los 3 — con un solo monitor en la lista,
+              # la HA de mon del lado de Ceph no serviría de nada del lado K8s.
+              monitors: "{{ dict(['mon-a', 'mon-b', 'mon-c'] | zip(ceph_mon_ips | map('regex_replace', '$', ':6789'))) }}"
               # rbdMirrorDaemonCount controla cuántas réplicas del daemon de
               # rbd-mirror despliega el operador para esta conexión; se deja
               # en 1 porque este laboratorio no configura replicación RBD
@@ -191,6 +229,6 @@
           - "  ¡CEPH EXTERNO INTEGRADO CON ÉXITO EN KUBERNETES!"
           - "  "
           - "  FSID de Ceph: {{ ceph_fsid }}"
-          - "  Monitor IP: {{ ceph_mon_ip }}:6789"
+          - "  Monitores (HA, 3): {{ ceph_mon_ips | map('regex_replace', '^(.*)$', '\\1:6789') | join(' , ') }}"
           - "  StorageClass creada: 'ceph-block-external' (RBD / RWO) [Defecto]"
           - "════════════════════════════════════════════════════════════════"

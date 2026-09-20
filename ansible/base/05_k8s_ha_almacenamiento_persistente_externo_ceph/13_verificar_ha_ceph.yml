@@ -1,0 +1,121 @@
+---
+- name: Verificar la alta disponibilidad de los nodos de control Ceph (mon+mgr)
+  hosts: ceph_control_bootstrap
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Comprobar el quorum de monitores
+      ansible.builtin.command: ceph quorum_status -f json
+      register: quorum_status
+      changed_when: false
+
+    - name: Verificar que los 3 monitores están en quorum
+      ansible.builtin.assert:
+        that:
+          - (quorum_status.stdout | from_json).quorum_names | length == groups['ceph_control'] | length
+        fail_msg: >-
+          Solo {{ (quorum_status.stdout | from_json).quorum_names | length }} de
+          {{ groups['ceph_control'] | length }} monitores están en quorum
+          ({{ (quorum_status.stdout | from_json).quorum_names | join(', ') }}) — revisar
+          conectividad de red entre los nodos de ceph_control o el estado de sus daemons mon.
+
+    - name: Comprobar los daemons mgr activos
+      ansible.builtin.command: ceph orch ps --daemon-type mgr -f json
+      register: mgr_ps
+      changed_when: false
+
+    - name: Verificar que hay 1 mgr activo y el resto en standby
+      ansible.builtin.assert:
+        that:
+          - (mgr_ps.stdout | from_json) | length == groups['ceph_control'] | length
+          - (mgr_ps.stdout | from_json | selectattr('status_desc', 'equalto', 'running') | list) | length == groups['ceph_control'] | length
+        fail_msg: >-
+          Se esperaban {{ groups['ceph_control'] | length }} daemons mgr en ejecución
+          (1 activo + resto en standby); estado real: {{ mgr_ps.stdout }}
+
+    - name: Averiguar el mgr activo antes de la prueba de failover
+      ansible.builtin.command: ceph mgr dump -f json
+      register: mgr_dump_before
+      changed_when: false
+
+    - name: Forzar un failover de prueba del mgr activo
+      # 'ceph mgr fail' es una operación segura y no destructiva: el mgr activo
+      # cede el testigo al instante a uno de los standby, sin downtime real del
+      # clúster (el mgr no es necesario para servir I/O de datos, solo para
+      # orquestación/dashboard). Es la forma estándar de comprobar que el
+      # failover automático funciona de verdad, no solo que hay standbys listados.
+      ansible.builtin.command: >
+        ceph mgr fail {{ (mgr_dump_before.stdout | from_json).active_name }}
+      changed_when: true
+
+    - name: Esperar a que el failover complete con un mgr activo distinto
+      ansible.builtin.command: ceph mgr dump -f json
+      register: mgr_dump_after
+      until: >
+        (mgr_dump_after.stdout | from_json).active_name
+        != (mgr_dump_before.stdout | from_json).active_name
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: Comprobar la salud general del clúster tras el failover de prueba
+      ansible.builtin.command: ceph health
+      register: ceph_health_after
+      changed_when: false
+      failed_when: "'HEALTH_ERR' in ceph_health_after.stdout"
+
+    # Este playbook es solo de VERIFICACIÓN: no debe dejar el clúster en un
+    # estado distinto al que dejó el 12 (que no toca el mgr activo para nada).
+    # El failover de prueba de arriba cambia qué mgr está activo, así que hay
+    # que devolverlo al mismo que estaba activo antes de esta verificación.
+    # 'ceph mgr fail <activo>' no permite elegir a qué standby concreto pasa
+    # el testigo, así que se reintenta en bucle hasta volver al original —con
+    # solo 3 mgr en total, como máximo hacen falta 2 fallos más para
+    # garantizar (por descarte) volver al mismo que empezó activo.
+    - name: Restaurar el mgr que estaba activo antes de esta verificación
+      ansible.builtin.shell: |
+        set -e
+        original="{{ (mgr_dump_before.stdout | from_json).active_name }}"
+        for i in 1 2 3 4 5; do
+          current=$(ceph mgr dump -f json | python3 -c 'import json,sys; print(json.load(sys.stdin)["active_name"])')
+          if [ "$current" = "$original" ]; then
+            exit 0
+          fi
+          ceph mgr fail "$current"
+          sleep 5
+        done
+        current=$(ceph mgr dump -f json | python3 -c 'import json,sys; print(json.load(sys.stdin)["active_name"])')
+        [ "$current" = "$original" ]
+      register: mgr_restore
+      changed_when: true
+
+    - name: Confirmar el estado final de mon/mgr (debe coincidir con el que dejó el 12)
+      ansible.builtin.command: ceph mgr dump -f json
+      register: mgr_dump_final
+      changed_when: false
+
+    - name: Verificar que el mgr activo ha vuelto a ser el original
+      ansible.builtin.assert:
+        that:
+          - (mgr_dump_final.stdout | from_json).active_name == (mgr_dump_before.stdout | from_json).active_name
+        fail_msg: >-
+          El playbook de verificación no dejó el clúster como lo dejó el 12: el mgr activo
+          antes era {{ (mgr_dump_before.stdout | from_json).active_name }} y ahora es
+          {{ (mgr_dump_final.stdout | from_json).active_name }}.
+
+    - name: Resolver la IP del mgr activo final (debe ser la misma que antes de este playbook)
+      ansible.builtin.set_fact:
+        active_mgr_host_final: "{{ (mgr_dump_final.stdout | from_json).active_name.split('.')[0] }}"
+
+    - name: Mostrar resultado de la verificación de HA
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════════════════════"
+          - "  ¡ALTA DISPONIBILIDAD DE CEPH_CONTROL VERIFICADA CON ÉXITO!"
+          - "  "
+          - "  Quorum de mon: {{ (quorum_status.stdout | from_json).quorum_names | join(', ') }}"
+          - "  Failover de prueba: {{ (mgr_dump_before.stdout | from_json).active_name }} → {{ (mgr_dump_after.stdout | from_json).active_name }} → restaurado a {{ (mgr_dump_final.stdout | from_json).active_name }}"
+          - "  Estado de salud final: {{ ceph_health_after.stdout }}"
+          - "  Dashboard (mgr activo, igual que al terminar el 12): https://{{ hostvars[active_mgr_host_final].ansible_host }}:8443"
+          - "  El clúster queda exactamente como lo dejó 12_verificar_persistencia.yml."
+          - "════════════════════════════════════════════════════════════════"

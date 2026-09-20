@@ -16,6 +16,25 @@
         is_k8s_node: "{{ node_name.startswith('k8s-') }}"
         is_ceph_node: "{{ node_name.startswith('ceph-') }}"
 
+    # Nunca delegar en el propio nodo que se está borrando: si node_name es uno
+    # de los nodos de ceph_control (ej. el de bootstrap), su VM ya se destruye
+    # más abajo antes de la purga en Ceph — delegar ahí dejaría el bloque de
+    # purga intentando conectar por SSH a un host que ya no existe. Se calcula
+    # aquí, antes de destruir nada, la lista de candidatos vivos (cualquier
+    # nodo de ceph_control que NO sea el que se está borrando).
+    - name: Calcular a qué nodo de control Ceph delegar los comandos (nunca el que se está borrando)
+      ansible.builtin.set_fact:
+        ceph_delegate_candidates: "{{ (groups['ceph_control'] | default([])) | difference([node_name]) }}"
+
+    - name: Avisar si no queda ningún nodo de control Ceph vivo al que delegar
+      ansible.builtin.debug:
+        msg: >-
+          No se puede purgar '{{ node_name }}' del clúster Ceph: no queda ningún otro nodo de
+          ceph_control vivo al que delegar los comandos 'ceph'. La VM se destruirá igualmente,
+          pero el estado en el clúster Ceph (mon/mgr/host) quedará huérfano y habrá que
+          purgarlo a mano.
+      when: is_ceph_node and ceph_delegate_candidates | length == 0
+
     # ================= SECCIÓN KUBERNETES =================
     - name: Drenar y eliminar nodo de Kubernetes
       block:
@@ -116,10 +135,10 @@
           delay: 5
           failed_when: false
           changed_when: true
-      delegate_to: "{{ groups['ceph_monitors'][0] }}"
+      delegate_to: "{{ ceph_delegate_candidates | first }}"
       vars:
         ansible_connection: ssh
-      when: is_ceph_node and groups['ceph_monitors'] is defined and groups['ceph_monitors'] | length > 0
+      when: is_ceph_node and ceph_delegate_candidates | length > 0
 
     - name: Eliminar el volumen de almacenamiento OSD de Ceph en LXD (si es de almacenamiento)
       ansible.builtin.command: >

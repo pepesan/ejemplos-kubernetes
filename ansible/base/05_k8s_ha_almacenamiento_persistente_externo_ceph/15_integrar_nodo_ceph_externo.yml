@@ -8,7 +8,7 @@
       ansible.builtin.fail:
         msg: >
           No hay nodos Ceph OSD definidos para integrar. Este playbook asume que ya se ha
-          ejecutado 13_add_node.yml y que la VM del nuevo nodo ya existe.
+          ejecutado 14_add_node.yml y que la VM del nuevo nodo ya existe.
       when: "'new_ceph_osds' not in groups or groups['new_ceph_osds'] | length == 0"
       delegate_to: localhost
       become: false
@@ -48,8 +48,8 @@
         state: started
         enabled: true
 
-- name: Leer clave SSH pública de Ceph desde el monitor
-  hosts: ceph_monitors
+- name: Leer clave SSH pública de Ceph desde el nodo de control
+  hosts: ceph_control_bootstrap
   become: true
   gather_facts: false
   tasks:
@@ -71,10 +71,10 @@
       ansible.builtin.authorized_key:
         user: root
         state: present
-        key: "{{ hostvars[groups['ceph_monitors'][0]]['ceph_ssh_key'] }}"
+        key: "{{ hostvars[groups['ceph_control_bootstrap'][0]]['ceph_ssh_key'] }}"
 
 - name: Registrar e integrar el nuevo OSD en el clúster Ceph Externo
-  hosts: ceph_monitors
+  hosts: ceph_control_bootstrap
   become: true
   gather_facts: false
   tasks:
@@ -113,7 +113,7 @@
     kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
     headlamp_token_path: "{{ playbook_dir }}/headlamp_token.txt"
     ceph_dashboard_password_path: "{{ playbook_dir }}/ceph_dashboard_password.txt"
-    ceph_monitor_ip: "{{ hostvars[groups['ceph_monitors'][0]].ansible_host }}"
+    ceph_monitor_ip: "{{ hostvars[groups['ceph_control_bootstrap'][0]].ansible_host }}"
   tasks:
     - name: Mostrar resumen del proceso
       ansible.builtin.debug:

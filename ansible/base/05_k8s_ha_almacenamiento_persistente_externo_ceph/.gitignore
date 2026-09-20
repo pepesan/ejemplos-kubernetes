@@ -6,3 +6,6 @@ headlamp_token.txt
 join_command.txt
 certificate_key.txt
 ceph_dashboard_password.txt
+
+# Notas de planificación locales, no compartidas en el repo
+PLAN.md
