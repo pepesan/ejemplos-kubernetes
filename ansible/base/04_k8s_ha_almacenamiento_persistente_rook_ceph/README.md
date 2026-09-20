@@ -107,7 +107,7 @@ Recursos que este laboratorio reserva en LXD (6 VMs) — el host debe tener al m
     *   **Quitar un nodo worker (con disco Ceph OSD):**
         1. Ejecuta el playbook de eliminación especificando el nombre del nodo:
            ```bash
-           ansible-playbook 15_eliminar_nodo.yml -e "node_name=k8s-worker3"
+           ansible-playbook 15_eliminar_nodo.yml -e "node_name=k8s-worker4"
            ```
            *Esto drenará el nodo, lo eliminará de Kubernetes, destruirá su VM en LXD y eliminará su volumen de almacenamiento OSD, obligando a Ceph a redistribuir y reconstruir los datos en los workers restantes.*
 

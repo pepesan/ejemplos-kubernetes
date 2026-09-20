@@ -3,6 +3,10 @@
   hosts: first_manager
   become: true
   gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    headlamp_token_path: "{{ playbook_dir }}/headlamp_token.txt"
+    ceph_dashboard_password_path: "{{ playbook_dir }}/ceph_dashboard_password.txt"
   tasks:
     - name: Validar que existe el grupo new_workers en el inventario y no está vacío
       ansible.builtin.fail:
@@ -29,4 +33,21 @@
           - "  Nodos agregados: {{ groups['new_workers'] | join(', ') }}"
           - "  Rook Ceph detectará automáticamente la incorporación del nodo"
           - "  y aprovisionará el OSD en su disco /dev/vdb."
+          - "  "
+          - "  ── ACCESO AL CLÚSTER ──────────────────────────────────────"
+          - "  "
+          - "  kubectl (desde tu host local):"
+          - "    export KUBECONFIG={{ kubeconfig_path }}"
+          - "    kubectl get nodes"
+          - "  "
+          - "  Headlamp Dashboard:"
+          - "    URL: http://{{ k8s_vip_address }}:32082"
+          - "    Token de acceso guardado en: {{ headlamp_token_path }}"
+          - "    Para consultarlo: cat {{ headlamp_token_path }}"
+          - "  "
+          - "  Ceph Dashboard:"
+          - "    URL: http://{{ k8s_vip_address }}:32070"
+          - "    Usuario: admin"
+          - "    Contraseña guardada en: {{ ceph_dashboard_password_path }}"
+          - "    Para consultarla: cat {{ ceph_dashboard_password_path }}"
           - "════════════════════════════════════════════════════════════════"
