@@ -53,6 +53,17 @@
       register: ceph_conf_stat
 
     - name: Inicializar clúster Ceph con cephadm bootstrap
+      # --skip-monitoring-stack: cephadm despliega por defecto su propia pila
+      # completa (Prometheus, Grafana, node-exporter, alertmanager) como
+      # contenedores gestionados por el propio orquestador de Ceph; en este
+      # laboratorio ese stack se sustituye por el de 07_k8s_observabilidad_*
+      # dentro del propio clúster de Kubernetes, así que se omite para no
+      # duplicar servicios ni malgastar recursos en las VMs de Ceph.
+      # --allow-fqdn-hostname: cephadm rechaza por defecto hostnames que
+      # contengan un punto (los interpreta como FQDN, no como el nombre corto
+      # que espera para identificar el nodo); el hostname de las VMs de LXD
+      # en este laboratorio sí incluye el dominio, así que hay que permitirlo
+      # explícitamente o el bootstrap falla antes de arrancar ningún daemon.
       ansible.builtin.command: >
         cephadm bootstrap
         --mon-ip {{ ansible_host }}
@@ -110,6 +121,11 @@
       changed_when: "'Added host' in host_add_out.stdout"
 
     - name: Comprobar si ya existe la especificación osd.all-available-devices
+      # 'ceph orch apply osd --all-available-devices' es en sí mismo idempotente
+      # (no crea OSDs duplicados en discos ya usados), pero siempre devuelve
+      # rc=0 con un mensaje de "Scheduled" tanto si crea la especificación por
+      # primera vez como si ya existía; sin esta comprobación previa, Ansible
+      # marcaría la tarea siguiente como "changed" en todas las reejecuciones.
       ansible.builtin.command: ceph orch ls --service-name osd.all-available-devices --format json
       register: osd_spec_check
       changed_when: false
@@ -117,6 +133,9 @@
 
     - name: Activar escaneo de dispositivos y creación automática de OSDs en discos vacíos (/dev/vdb)
       ansible.builtin.command: ceph orch apply osd --all-available-devices
+      # 'No services reported' es la salida exacta de 'ceph orch ls' cuando la
+      # especificación aún no existe (comando anterior); solo en ese caso esta
+      # tarea provoca un cambio real de estado en el clúster Ceph.
       changed_when: "'No services reported' in osd_spec_check.stdout"
 
     - name: Esperar a que se aprovisionen los OSDs (mínimo 3 OSDs listos)
@@ -142,7 +161,7 @@
           - "  Estado de Salud: {{ ceph_health.stdout }}"
           - "  Nodos OSD integrados: {{ groups['ceph_osds'] | join(', ') }}"
           - "  "
-          - "  Ceph Dashboard: http://{{ ansible_host }}:8443 (o puerto por defecto)"
+          - "  Ceph Dashboard: https://{{ ansible_host }}:8443 (certificado autofirmado)"
           - "  Usuario: admin"
           - "  Contraseña guardada de forma segura en: {{ playbook_dir }}/ceph_dashboard_password.txt"
           - "════════════════════════════════════════════════════════════════"

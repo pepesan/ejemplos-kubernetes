@@ -109,6 +109,11 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars:
+    kubeconfig_path: "{{ playbook_dir }}/kubeconfig.yaml"
+    headlamp_token_path: "{{ playbook_dir }}/headlamp_token.txt"
+    ceph_dashboard_password_path: "{{ playbook_dir }}/ceph_dashboard_password.txt"
+    ceph_monitor_ip: "{{ hostvars[groups['ceph_monitors'][0]].ansible_host }}"
   tasks:
     - name: Mostrar resumen del proceso
       ansible.builtin.debug:
@@ -117,4 +122,21 @@
           - "  ¡NUEVO NODO INTEGRADO EN EL CLÚSTER CEPH EXTERNO!"
           - "  "
           - "  Nodos Ceph OSD agregados: {{ groups['new_ceph_osds'] | default([]) | join(', ') }}"
+          - "  "
+          - "  ── ACCESO AL CLÚSTER ──────────────────────────────────────"
+          - "  "
+          - "  kubectl (desde tu host local):"
+          - "    export KUBECONFIG={{ kubeconfig_path }}"
+          - "    kubectl get nodes"
+          - "  "
+          - "  Headlamp Dashboard:"
+          - "    URL: http://{{ k8s_vip_address }}:32082"
+          - "    Token de acceso guardado en: {{ headlamp_token_path }}"
+          - "    Para consultarlo: cat {{ headlamp_token_path }}"
+          - "  "
+          - "  Ceph Dashboard:"
+          - "    URL: https://{{ ceph_monitor_ip }}:8443"
+          - "    Usuario: admin"
+          - "    Contraseña guardada en: {{ ceph_dashboard_password_path }}"
+          - "    Para consultarla: cat {{ ceph_dashboard_password_path }}"
           - "════════════════════════════════════════════════════════════════"

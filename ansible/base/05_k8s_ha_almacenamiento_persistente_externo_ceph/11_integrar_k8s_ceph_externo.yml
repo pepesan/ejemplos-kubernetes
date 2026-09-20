@@ -63,7 +63,14 @@
             namespace: ceph-csi
           stringData:
             userID: admin
+            # userKey: clave que usa el driver CSI para las operaciones normales
+            # (crear/montar/expandir volúmenes RBD) autenticado como 'admin'.
             userKey: "{{ ceph_admin_key }}"
+            # admin: mismo valor que userKey, pero bajo la clave que espera
+            # concretamente la operación de expansión de volumen (resize) del
+            # driver Ceph CSI; el chart la busca con este nombre fijo aparte
+            # de userKey, así que hay que duplicar el mismo secreto con ambas
+            # claves aunque el valor sea idéntico.
             admin: "{{ ceph_admin_key }}"
 
     - name: Agregar el repositorio de Ceph CSI a Helm
@@ -101,11 +108,30 @@
           # Configurar la conexión al Ceph externo vía las CRDs CephConnection/ClientProfile
           # (el chart ceph-csi-operator/ceph-csi-drivers ya no usa un ConfigMap plano).
           cephConnections:
+            # El nombre de la CephConnection se fija al FSID real del clúster
+            # Ceph (no a un alias arbitrario tipo "ceph-externo"): es el mismo
+            # valor que luego se referencia como 'clusterID' en la StorageClass
+            # de abajo, y es como el driver CSI localiza a qué clúster Ceph
+            # pertenece cada volumen.
             - name: "{{ ceph_fsid }}"
               monitors:
+                # La clave ('mon-a') es solo una etiqueta interna arbitraria
+                # para identificar esta entrada dentro del mapa de monitores;
+                # no tiene que coincidir con el nombre real del daemon mon en
+                # Ceph. El valor sí importa: host:puerto del monitor real.
                 mon-a: "{{ ceph_mon_ip }}:6789"
+                # Este laboratorio solo tiene un monitor Ceph (ceph_monitors
+                # con un único host), por lo que no hay más entradas que
+                # añadir aquí para alta disponibilidad de monitores.
+              # rbdMirrorDaemonCount controla cuántas réplicas del daemon de
+              # rbd-mirror despliega el operador para esta conexión; se deja
+              # en 1 porque este laboratorio no configura replicación RBD
+              # entre clústeres Ceph, solo necesita que el recurso exista.
               rbdMirrorDaemonCount: 1
           clientProfiles:
+            # El ClientProfile también se nombra con el FSID para que coincida
+            # con el 'clusterID' que la StorageClass usa al pedir un volumen;
+            # es la referencia que enlaza ambas CRDs entre sí.
             - name: "{{ ceph_fsid }}"
               cephConnection:
                 name: "{{ ceph_fsid }}"
@@ -122,22 +148,40 @@
           metadata:
             name: ceph-block-external
             annotations:
+              # Única StorageClass de este laboratorio (no convive con otra
+              # como en el lab 04 con rook-ceph/ceph-filesystem), así que se
+              # marca como predeterminada para que cualquier PVC sin
+              # storageClassName explícito la use automáticamente.
               storageclass.kubernetes.io/is-default-class: "true"
           provisioner: rbd.csi.ceph.com
+          # Delete borra el volumen RBD subyacente al borrar el PVC; válido
+          # para un laboratorio, no recomendable en producción (ahí se
+          # preferiría 'Retain' para no perder datos por accidente).
           reclaimPolicy: Delete
           allowVolumeExpansion: true
           volumeBindingMode: Immediate
           parameters:
+            # clusterID debe coincidir exactamente con el 'name' del
+            # CephConnection/ClientProfile de arriba (el FSID real de Ceph):
+            # es como el driver CSI resuelve, a partir de este ID, a qué
+            # monitores y credenciales conectarse para aprovisionar el volumen.
             clusterID: "{{ ceph_fsid }}"
             pool: rbd-k8s
+            # Formato de imagen RBD v2, requerido por 'imageFeatures: layering'.
             imageFormat: "2"
             imageFeatures: layering
+            # Mismo secreto (csi-ceph-secret) reutilizado para las tres fases
+            # del ciclo de vida del volumen (aprovisionar, expandir, montar en
+            # el nodo); el driver CSI de Ceph exige declarar cada una por
+            # separado aunque apunten todas al mismo Secret.
             csi.storage.k8s.io/provisioner-secret-name: csi-ceph-secret
             csi.storage.k8s.io/provisioner-secret-namespace: ceph-csi
             csi.storage.k8s.io/controller-expand-secret-name: csi-ceph-secret
             csi.storage.k8s.io/controller-expand-secret-namespace: ceph-csi
             csi.storage.k8s.io/node-stage-secret-name: csi-ceph-secret
             csi.storage.k8s.io/node-stage-secret-namespace: ceph-csi
+            # ext4 es el filesystem con el que el driver CSI formatea cada
+            # volumen RBD nuevo antes de montarlo en el pod.
             csi.storage.k8s.io/fstype: ext4
 
     - name: Mostrar resumen de integración
